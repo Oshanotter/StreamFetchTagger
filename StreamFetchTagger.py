@@ -15,10 +15,9 @@ import queue
 import time
 from PIL import ImageTk, Image
 from io import BytesIO
-import plistlib
 
 app_name = "StreamFetchTagger"
-app_version = "1.0.0"
+app_version = "1.1.0"
 tmdb_key = "9de437782139633fe25c0d307d5da137"
 opensubtitles_token = None
 opensubtitles_key = "lhUi4siT3Y6pbCI0qkCNNJG48q1mzXLT"
@@ -35,8 +34,8 @@ backdrop_list = []
 last_load_id = ""
 debounce_timer = None
 metadata = {}
-plist_content = None
 
+# Function to get the binary paths of the included resources
 def get_binary_path(binary_name):
     """Finds the correct path to a bundled binary"""
     if getattr(sys, 'frozen', False):  # Running inside PyInstaller
@@ -48,39 +47,10 @@ def get_binary_path(binary_name):
 
 # Define binary paths
 FFMPEG_PATH = get_binary_path("ffmpeg")
-FFPROBE_PATH = get_binary_path("ffprobe")
-ATOMIC_PARSLEY_PATH = get_binary_path("AtomicParsley")
 MP4BOX_PATH = get_binary_path("MP4Box")
+SUBLERCLI_PATH = get_binary_path("SublerCLI")
 
-
-def download_thumbnail():
-    global thumbnail_image_path_or_url
-    print(thumbnail_image_path_or_url)
-
-    if "http" not in thumbnail_image_path_or_url:
-        print("thumbnail_image_path_or_url is already downloaded")
-        return
-
-    # Determine file extension from URL
-    ext = os.path.splitext(thumbnail_image_path_or_url)[-1] or ".jpg"
-    url = url_entry.get().strip()
-    hash = hash_url(url)
-    save_path = os.path.join(hidden_folder, f"{hash}{ext}")
-
-    try:
-        response = requests.get(thumbnail_image_path_or_url, stream=True)
-        response.raise_for_status()  # Raise error if request fails
-
-        with open(save_path, "wb") as file:
-            for chunk in response.iter_content(1024):
-                file.write(chunk)
-
-        print(f"Thumbnail downloaded successfully to {save_path}")
-        thumbnail_image_path_or_url = save_path
-
-    except requests.RequestException as e:
-        print(f"Failed to download thumbnail: {e}")
-
+# Functions to retireve information and download assets about the video
 
 def retrieve_tmdb_data(event=None):
     """Retrieves the data from TMDB for the specified ID and media type"""
@@ -127,9 +97,8 @@ def retrieve_tmdb_data(event=None):
     def retrieve_data():
 
         global metadata
-        global plist_content
         metadata = {}
-        plist_content = None
+
 
         try:
             # If it's a TV show, make two requests: one for the show info and one for the episode info
@@ -170,10 +139,12 @@ def retrieve_tmdb_data(event=None):
 
 
                 # **Get the rating (US region)**
-                rating = "Not Rated"
+                rating = "TV Unrated"
                 for rating_entry in rating_data.get("results", []):
                     if rating_entry["iso_3166_1"] == "US":
-                        rating = rating_entry.get("rating", "Not Rated")
+                        rating = rating_entry.get("rating", "TV Unrated")
+                        if rating == "NR":
+                            rating = "TV NR"
                         break
 
                 cast = [cast_member["name"] for cast_member in credits_data.get("cast", [])]
@@ -213,12 +184,14 @@ def retrieve_tmdb_data(event=None):
                 long_description = data.get("overview", "No long description available.")
 
                 # **Get movie rating (US region)**
-                rating = "Not Rated"
+                rating = "Movie Unrated"
                 for country in rating_data.get("results", []):
                     if country["iso_3166_1"] == "US":
                         for release in country.get("release_dates", []):
-                            rating = release.get("certification", "Not Rated")
+                            rating = release.get("certification", "Movie Unrated")
                             if rating:  # Stop at first found rating
+                                if rating == "NR":
+                                    rating = "Movie NR"
                                 break
 
                 cast = [cast_member["name"] for cast_member in credits_data.get("cast", [])]
@@ -267,50 +240,106 @@ def retrieve_tmdb_data(event=None):
                 print(f"Screenwriter(s): {screenwriters}")
                 print(f"Cast: {cast}")
 
+            certification_ratings = {
+                # US TV Ratings
+                "TV-Y":     "us-tv|TV-Y|100",
+                "TV-Y7":    "us-tv|TV-Y7|200",
+                "TV-G":     "us-tv|TV-G|300",
+                "TV-PG":    "us-tv|TV-PG|400",
+                "TV-14":    "us-tv|TV-14|500",
+                "TV-MA":    "us-tv|TV-MA|600",
+                "TV NR":    "us-tv|Unrated|???",
+                "TV Unrated": "us-tv|Unrated|???",
+
+                # US Movie Ratings (MPA formerly MPAA)
+                "G":        "mpaa|G|100",
+                "PG":       "mpaa|PG|200",
+                "PG-13":    "mpaa|PG-13|300",
+                "R":        "mpaa|R|400",
+                "NC-17":    "mpaa|NC-17|500",
+                "Movie NR":    "mpaa|NR|000|",
+                "Movie Unrated": "mpaa|Unrated|???"
+            }
+
             if tv_var.get():
                 metadata = {
-                    "--title": name,
-                    "--genre": genre,
-                    "--year": release_date,
-                    "--TVNetwork": tv_network,
-                    "--contentRating": rating,
-                    "--TVShowName": tv_show,
-                    "--TVSeasonNum": season,
-                    "--TVEpisodeNum": episode,
-                    "--description": description,
-                    "--longdesc": long_description,
-                    "--storedesc": series_description,
-                    "--artist": ", ".join(directors),
-                    "--stik": "TV Show", # Set mediatype to tv show
+                    "Name": name,
+                    "Genre": genre,
+                    "Release Date": release_date,
+                    "TV Network": tv_network,
+                    "Rating": certification_ratings[rating],
+                    "TV Show": tv_show,
+                    "TV Season": season,
+                    "TV Episode #": episode,
+                    "Description": description,
+                    "Long Description": long_description,
+                    "Series Description": series_description,
+                    "Studio": studios,
+                    "Cast": ", ".join(cast),
+                    "Director": ", ".join(directors),
+                    "Screenwriters": ", ".join(screenwriters),
+                    "Media Kind": "10", # Set mediatype to tv show
                 }
             else:
                 # Metadata for movies
                 metadata = {
-                    "--title": name,
-                    "--genre": genre,
-                    "--year": release_date,
-                    "--contentRating": rating,
-                    "--description": description,
-                    "--longdesc": long_description,
-                    "--artist": ", ".join(directors),
-                    "--stik": "Movie" # Set mediatype to movie
+                    "Name": name,
+                    "Genre": genre,
+                    "Release Date": release_date,
+                    "Rating": certification_ratings[rating],
+                    "Description": description,
+                    "Long Description": long_description,
+                    "Artist": ", ".join(directors),
+                    "Studio": studios,
+                    "Cast": ", ".join(cast),
+                    "Director": ", ".join(directors),
+                    "Producers": ", ".join(producers),
+                    "Screenwriters": ", ".join(screenwriters),
+                    "Media Kind": "9" # Set mediatype to movie
                 }
 
             if unknown_media == None:
                 metadata = {}
-                plist_content = None
 
-            plist_content = makePlist(cast, directors, producers, screenwriters, studios)
+
 
             retrieve_backdrops(tmdb_id, media_type, still_path)
 
         except Exception as e:
             tmdb_title_var.set("Error fetching data from TMDB")
             metadata = {}
-            plist_content = None
             print(f"Error: {e}")
 
     debounce_timer = root.after(500, lambda: threading.Thread(target=retrieve_data, daemon=True).start())
+
+def download_thumbnail():
+    """Downloads the thumbnail for the tmdb id based on the thumbnail_image_path_or_url"""
+    global thumbnail_image_path_or_url
+    print(thumbnail_image_path_or_url)
+
+    if "http" not in thumbnail_image_path_or_url:
+        print("thumbnail_image_path_or_url is already downloaded")
+        return
+
+    # Determine file extension from URL
+    ext = os.path.splitext(thumbnail_image_path_or_url)[-1] or ".jpg"
+    url = url_entry.get().strip()
+    hash = hash_url(url)
+    save_path = os.path.join(hidden_folder, f"{hash}{ext}")
+
+    try:
+        response = requests.get(thumbnail_image_path_or_url, stream=True)
+        response.raise_for_status()  # Raise error if request fails
+
+        with open(save_path, "wb") as file:
+            for chunk in response.iter_content(1024):
+                file.write(chunk)
+
+        print(f"Thumbnail downloaded successfully to {save_path}")
+        thumbnail_image_path_or_url = save_path
+
+    except requests.RequestException as e:
+        print(f"Failed to download thumbnail: {e}")
 
 def retrieve_backdrops(tmdb_id, media_type, still_path):
     """
@@ -321,7 +350,7 @@ def retrieve_backdrops(tmdb_id, media_type, still_path):
     Args:
         tmdb_id (str): The TMDB ID of the media.
         media_type (str): "movie" or "tv".
-        api_key (str): Your TMDB API key.
+        still_path (str): The url path of the still image.
     """
     # TMDB URL to get images
     url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/images?language=en&api_key={tmdb_key}"
@@ -362,7 +391,6 @@ def retrieve_backdrops(tmdb_id, media_type, still_path):
 
     update_image(image_url)
 
-
 def update_image(file_path_or_url):
     """Load and display the image using Pillow, accepts both file paths and URLs."""
     global thumbnail_image  # Prevent garbage collection
@@ -399,9 +427,204 @@ def select_image():
     if file_path:
         update_image(file_path)
 
+def get_subtitles():
+    """Finds and downloads subtitles for a tmdb id. Downloads both non-foreign and foreign subtitles."""
 
+    url = "https://api.opensubtitles.com/api/v1/subtitles"
+
+    current_tmdb_id = tmdb_id_entry.get().strip()
+
+    if tv_var.get():
+        # The media is a tv show
+        season = season_entry.get().strip()
+        episode = episode_entry.get().strip()
+        querystring = {"tmdb_id":current_tmdb_id,"languages":"en","season_number":season,"episode_number":episode}
+
+
+    else:
+        # The media is a movie
+        querystring = {"tmdb_id":current_tmdb_id,"languages":"en"}
+
+
+    headers = {
+        "User-Agent": opensubtitles_user_agent,
+        "Api-Key": opensubtitles_key
+    }
+
+    response = requests.get(url, headers=headers, params=querystring)
+
+    print(response.json())
+
+    def get_best_subtitles(subtitle_data):
+        try:
+            if not subtitle_data.get("data"):
+                return None
+
+            subtitles = subtitle_data["data"]
+
+            # Sorting function based on multiple criteria
+            def subtitle_score(sub):
+                attributes = sub.get("attributes")
+                return (
+                    attributes.get("hearing_impaired") == False,  # Prefer non-hearing-impaired
+                    attributes.get("from_trusted", False),        # Prefer from trusted sources
+                    attributes.get("ratings", 0.0),               # Prefer higher ratings
+                    attributes.get("download_count", 0),          # Prefer higher download counts
+                )
+
+            # Sort subtitles with the best one first
+            sorted_subtitles = sorted(subtitles, key=subtitle_score, reverse=True)
+
+            # Find the best foreign parts only subtitle
+            foreign_parts_subs = [
+                sub for sub in subtitles if sub.get("attributes").get("foreign_parts_only", False)
+            ]
+            best_foreign_parts_sub = (
+                sorted(foreign_parts_subs, key=subtitle_score, reverse=True)[0]
+                if foreign_parts_subs else None
+            )
+
+            # Get the best non foreign subtitle
+            non_foreign_parts_subs = [
+                sub for sub in subtitles if not sub.get("attributes").get("foreign_parts_only", False)
+            ]
+            best_non_foreign_parts_sub = (
+                sorted(non_foreign_parts_subs, key=subtitle_score, reverse=True)[0]
+                if non_foreign_parts_subs else None
+            )
+
+            # Return both subtitles if we found a foreign parts subtitle, otherwise just the best one
+            return [best_non_foreign_parts_sub, best_foreign_parts_sub] if best_foreign_parts_sub else [best_non_foreign_parts_sub]
+
+        except:
+            return None
+
+    def clean_subtitles(input_file, output_file, foreign_only=False):
+        with open(input_file, "r", encoding="utf-8") as infile, open(output_file, "w", encoding="utf-8") as outfile:
+            buffer = []
+            an8_present = False
+
+            for line in infile:
+                if r"{\an8}" in line:
+                    an8_present = True
+                    line = line.replace(r"{\an8}", "")  # remove the tag
+
+                if line.strip():
+                    buffer.append(line)
+                else:
+                    if buffer:
+                        if any("<font" in l for l in buffer):
+                            buffer.clear()
+                            an8_present = False
+                            continue
+
+                        # modify the timestamp line (second line)
+                        if len(buffer) >= 2 and "-->" in buffer[1]:
+                            ts_line = buffer[1].strip()
+
+                            if an8_present:
+                                ts_line += " X1:0"
+                            if foreign_only:
+                                ts_line += " !!!"
+
+                            buffer[1] = ts_line + "\n"
+
+                        outfile.writelines(buffer)
+                        outfile.write("\n")
+
+                        buffer.clear()
+                        an8_present = False  # reset for next block
+
+        os.remove(input_file)
+
+    def download_subtitles(file_id, file_path):
+        global opensubtitles_token
+        if opensubtitles_token is None:
+            url = "https://api.opensubtitles.com/api/v1/login"
+
+            payload = {
+                "username": "unsightlyPinnipedCalm",
+                "password": "P@ssw0rd"
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "User-Agent": opensubtitles_user_agent,
+                "Accept": "application/json",
+                "Api-Key": opensubtitles_key
+            }
+
+            response = requests.post(url, json=payload, headers=headers)
+            response_dict = response.json()
+            print(response_dict)
+
+            status = response_dict['status']
+            print(status)
+            opensubtitles_token = response_dict['token']
+            print(opensubtitles_token)
+
+        url = "https://api.opensubtitles.com/api/v1/download"
+
+        payload = { "file_id": file_id }
+        headers = {
+            "User-Agent": opensubtitles_user_agent,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {opensubtitles_token}",
+            "Api-Key": opensubtitles_key
+        }
+
+        response = requests.post(url, json=payload, headers=headers)
+
+        print(response.json())
+
+        srt_link = response.json()['link']
+
+        # Download it now
+        dl_response = requests.get(srt_link, stream=True)
+        with open(file_path, "wb") as file:
+            for chunk in dl_response.iter_content(chunk_size=8192):
+                file.write(chunk)
+
+        return file_path
+
+
+    best_subtitles = get_best_subtitles(response.json())
+
+    download_url = url_entry.get().strip()
+    hash = hash_url(download_url)
+    temp_sub_path = hidden_folder + "/" + hash + "_temp_sub.srt"
+    temp_foreign_sub_path = hidden_folder + "/" + hash + "_temp_sub_foreign.srt"
+    sub_path = hidden_folder + "/" + hash + "_sub.srt"
+    sub_foreign_path = hidden_folder + "/" + hash + "_sub_foreign.srt"
+
+    try:
+
+        if not best_subtitles:
+            print("No subtitles available")
+            return {"subtitles": None, "foreign_subtitles": None}
+
+        elif len(best_subtitles) > 1:
+            sub = download_subtitles(best_subtitles[0]['attributes']['files'][0]['file_id'], temp_sub_path)
+            clean_subtitles(sub, sub_path)
+
+            sub_foreign = download_subtitles(best_subtitles[1]['attributes']['files'][0]['file_id'], temp_foreign_sub_path)
+            clean_subtitles(sub_foreign, sub_foreign_path, foreign_only=True)
+
+            return {"subtitles": sub_path, "foreign_subtitles": sub_foreign_path}
+        else:
+            sub = download_subtitles(best_subtitles[0]['attributes']['files'][0]['file_id'], temp_sub_path)
+            clean_subtitles(sub, sub_path)
+
+            return {"subtitles": sub_path, "foreign_subtitles": None}
+
+    except:
+        return {"subtitles": None, "foreign_subtitles": None}
+
+
+# Functions to change or update settings
 
 def check_and_create_settings():
+    """Checks for the settings.json file. If it doesn't exist, it creates one with default settings."""
     settings_file = os.path.join(hidden_folder, "settings.json")
 
     # Default values for settings
@@ -432,8 +655,8 @@ def check_and_create_settings():
     select_folder(download_folder)  # Update the folder in your app
     selected_extension.set(file_extension)  # Update the file extension in your app
 
-# Function to update the settings and save the download folder and/or extension
 def update_settings(download_folder=None, file_extension=None):
+    """Updates the settings in the settings.json file, given the download folder path and the file extension of the video."""
     settings_file = os.path.join(hidden_folder, "settings.json")
 
     # Load existing settings
@@ -457,6 +680,7 @@ def update_settings(download_folder=None, file_extension=None):
     print(f"Settings updated: Download folder: {settings.get('download_folder')}, File extension: {settings.get('file_extension')}")
 
 
+# Helpful miscellaneous functions
 
 def hash_url(url):
     """Generate a short deterministic identifier from a URL."""
@@ -501,76 +725,38 @@ def disable_inputs(disable=True):
     filename_entry.config(state=str)
     extension_dropdown.config(state=str)
 
+def cleanup_old_files():
+    """Deletes files older than 1 day in the hidden_folder to save space"""
+    def clean_old_files():
+        now = time.time()
+        age_limit = 24 * 60 * 60  # 1 day
 
-def discard_download():
-    """Deletes all files associated with the current download"""
-    url = url_entry.get().strip()
-    hashed_id = hash_url(url)
-    # Find all files containing the hashed_id in their filenames
-    files_to_delete = glob.glob(os.path.join(hidden_folder, f"*{hashed_id}*"))
+        if not os.path.isdir(hidden_folder):
+            return
 
-    for file in files_to_delete:
-        try:
-            os.remove(file)
-            print(f"Deleted: {file}")
-        except Exception as e:
-            print(f"Error deleting {file}: {e}")
+        for filename in os.listdir(hidden_folder):
+            file_path = os.path.join(hidden_folder, filename)
+            if filename in {"settings.json"}:
+                continue
+            if os.path.isfile(file_path) and now - os.path.getmtime(file_path) > age_limit:
+                try:
+                    os.remove(file_path)
+                    print(f"Deleted: {file_path}")
+                except Exception as e:
+                    print(f"Failed to delete {file_path}: {e}")
 
-    output_var.set("Discarded current download.")
-    update_ui(" ", " ", " ", " ")
-    submit_button.config(text="Start Download", command=start_download)
-    discard_button.pack_forget()
+    # Run cleanup in a separate thread
+    cleanup_thread = threading.Thread(target=clean_old_files, daemon=True)
+    cleanup_thread.start()
+    print("cleaning...")
 
-def update_ui_from_queue():
-    """Check the queue for progress updates and update the UI."""
-    try:
-        while True:
-            percentage, file_size, eta, fragments = progress_queue.get_nowait()
-            update_ui(percentage, file_size, eta, fragments)
-    except queue.Empty:
-        root.after(100, update_ui_from_queue)  # Check the queue again after 100ms
 
-def update_ui(percentage, file_size, eta, fragments):
-    if percentage == " ":
-        progress_bar["value"] = 0
-        progress_var.set(percentage)
-    else:
-        percent = float(percentage[:-1])
-        progress_bar["value"] = percent
-        progress_var.set(percentage)
-    if fragments:
-        fragment_var.set(fragments)
-    if type(eta) == str:
-        eta = eta
-    else:
-        hours = int(eta // 3600)
-        minutes = int((eta % 3600) // 60)
-        seconds = int(eta % 60)
-        eta = ""
-        if hours > 0:
-            eta += f"{hours}h "
-        if minutes > 0 or hours > 0:  # Only include minutes if hours are present or minutes are non-zero
-            eta += f"{minutes}m "
-        eta += f"{seconds}s"
-    eta_var.set(eta)
-    if file_size:
-        size_var.set(file_size)
-
-def stop_download():
-    """Stop the download process."""
-    stop_event.set()
-
-    if download_process:
-        download_process.terminate()
-
-    output_var.set("Pausing Download...")
-
-    # Enable the url input again
-    url_entry.config(state="normal")
-
+# Functions related to the actual download of the video
 
 def start_download(startingText = "Starting Download..."):
-
+    """Starts the download of the url using yt-dlp.
+    Args: startingText (str), the text that is displayed while the download starts.
+    """
     # Disable the url entry
     url_entry.config(state="disabled")
 
@@ -681,11 +867,21 @@ def start_download(startingText = "Starting Download..."):
                     # subtitle_paths = {"subtitles": None, "foreign_subtitles": None}
                     # print(subtitle_paths)
 
+                    global thumbnail_image_path_or_url
+                    if thumbnail_image_path_or_url != placeholder_image_path:
+                        download_thumbnail()
+                        print("artwork is not default")
+                        ffmpeg_command = [FFMPEG_PATH, '-i', original_file, '-i', thumbnail_image_path_or_url, '-map', '0', '-map', '1', '-c:v', 'copy', '-c:a', 'copy', '-disposition:v:1', 'attached_pic', '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', 'faststart', temp_file, '-y']
+                    else:
+                        print("artowrk is default")
+                        ffmpeg_command = [FFMPEG_PATH, '-i', original_file, '-c:v', 'copy', '-c:a', 'copy', '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', 'faststart', temp_file, '-y']
+
                     output_var.set("Converting file to " + file_extension)
+                    progress_bar["value"] = 20
 
                     # Conversion using FFmpeg (if needed)
                     conversion_process = subprocess.Popen(
-                        [FFMPEG_PATH, '-i', original_file, '-c:v', 'copy', '-c:a', 'copy', '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', 'faststart', temp_file, '-y'],
+                        ffmpeg_command,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
                     )
 
@@ -701,83 +897,99 @@ def start_download(startingText = "Starting Download..."):
                     if conversion_process.returncode == 0:
                         print(f"Conversion to {file_extension} successful.")
                         output_var.set("Conversion Complete!")
+                        progress_bar["value"] = 40
 
+                        # Build the metadata string
+                        global metadata
+                        metadata_string = ""
+                        for key, value in metadata.items():
+                            metadata_string += '{' + key + ':' + value + '}'
+                        # Add extra metadata
+                        metadata_string += '{Encoding Tool:}'
+
+                        # Check to see what resolution height of the video is
+                        try:
+                            streams = subprocess.run([SUBLERCLI_PATH, "-source", original_file, "-listtracks"], capture_output=True, text=True)
+                            streams_list = streams.stdout.split("\n")
+                            height = 0
+                            for stream in streams_list:
+                                parts = stream.split(", ")
+                                if parts[1] != "Video Track":
+                                    continue
+                                else:
+                                    res_parts = parts[-1].split()
+                                    height = int(res_parts[-1])
+                                    print(height)
+                                    break
+
+                            if height < 720:
+                                metadata_string += '{HD Video:0}'
+                            elif 720 <= height < 1080:
+                                metadata_string += '{HD Video:1}'
+                            elif 1080 <= height < 2160:
+                                metadata_string += '{HD Video:2}'
+                            else:
+                                metadata_string += '{HD Video:3}'
+
+                        except Exception as e:
+                            metadata_string += '{HD Video:0}'
+
+                        # Start downloading the subtitles
                         output_var.set("Downloading Subtitles...")
+                        progress_bar["value"] = 60
                         subtitle_paths = get_subtitles()
                         subs = subtitle_paths["subtitles"]
                         subs_foreign = subtitle_paths["foreign_subtitles"]
-                        foreign_subs_exist = False
+
+                        output_var.set("Adding Subtitles...")
+                        progress_bar["value"] = 80
+                        mp4box_command_start = [MP4BOX_PATH, temp_file]
+                        foreign_subs_command = ["-add", f"{subs_foreign}:hdlr=sbtl:lang=eng:group=2:txtflags=0xC0000000"]
+                        regular_subs_command = ["-add", f"{subs}:hdlr=sbtl:lang=eng:group=2:disabled"]
+                        mp4box_command_end = ["-out", new_file]
                         if subs and subs_foreign:
-                            foreign_subs_exist = True
-                            subtitles_command = [MP4BOX_PATH, temp_file, '-add', f'{subs}:hdlr=sbtl:lang=eng:group=2:layer=-1:disabled', '-add', f'{subs_foreign}:hdlr=sbtl:lang=eng:group=2:layer=-1:txtflags=0xC0000000', '-udta', '4:type=tagc:str=public.main-program-content', '-udta', '3:type=tagc:str=public.auxiliary-content', '-out', new_file, '-flat']
-                            subs_out = subprocess.run(subtitles_command)
+                            # If both subs exist, add them both with mp4box (sublercli doesn't allow forced subtitles with 2 files)
+                            mp4box_command = mp4box_command_start + foreign_subs_command + regular_subs_command + mp4box_command_end
                         elif subs:
-                            subtitles_command = [MP4BOX_PATH, temp_file, '-add', f'{subs}:hdlr=sbtl:lang=eng:group=2:layer=-1', '-udta', '3:type=tagc:str=public.main-program-content', '-out', new_file, '-flat']
-                            subs_out = subprocess.run(subtitles_command)
+                            mp4box_command = mp4box_command_start + regular_subs_command + mp4box_command_end
+                        elif subs_foreign:
+                            mp4box_command = mp4box_command_start + foreign_subs_command + mp4box_command_end
 
-                        # Process metadata
-                        global metadata
-                        try:
-                            resolution_command = [FFPROBE_PATH, '-v', 'error', '-show_entries', 'stream=width,height', '-of', 'json', new_file]
-                            resolution_result = subprocess.run(resolution_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                            resolution_data = json.loads(resolution_result.stdout)
-                            resolution = resolution_data['streams'][0]['height']
-                            if not resolution or resolution < 720:
-                                metadata['--hdvideo'] = "0"
-                            elif resolution == 720:
-                                metadata['--hdvideo'] = "1"
-                            else:
-                                metadata['--hdvideo'] = "2"
-                        except Exception as e:
-                            metadata['--hdvideo'] = "0"
+                        mp4box_out = subprocess.run(mp4box_command, capture_output=True, text=True)
+                        if mp4box_out.returncode != 0:
+                            output_var.set("Error adding subtitles!")
+                            output_label.config(fg="red")
+                            raise Exception("Error adding subtitles!")
+                            return
 
-                        metadata_command = [ATOMIC_PARSLEY_PATH, new_file, "--overWrite"]
 
-                        # Add the plist content, it it is available
-                        if plist_content:
-                            metadata_command.append("--rDNSatom")
-                            metadata_command.append(plist_content)
-                            metadata_command.append("name=iTunMOVI")
-                            metadata_command.append("domain=com.apple.iTunes")
-
-                        for key, value in metadata.items():
-                            metadata_command.append(key)
-                            metadata_command.append(value)
-
-                        # Remove the encoding tool metadata
-                        metadata_command.append("--encodingTool")
-                        metadata_command.append("")
-
+                        # Use sublercli to add the metadata that ffmpeg and mp4box cannot, and optimize and organizegroups
                         output_var.set("Adding metadata...")
-                        global thumbnail_image_path_or_url
-                        if thumbnail_image_path_or_url != placeholder_image_path:
-                            download_thumbnail()
-                            metadata_command.append("--artwork")
-                            metadata_command.append(thumbnail_image_path_or_url)
-                        else:
-                            print("artowrk is default")
-
-                        print(metadata_command)
-                        metadata_process = subprocess.Popen(
-                            metadata_command,
+                        progress_bar["value"] = 90
+                        subler_command = [SUBLERCLI_PATH, "-dest", new_file, "-optimize", "-organizegroups", "-metadata", metadata_string]
+                        subler_process = subprocess.Popen(
+                            subler_command,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
                         )
 
-                        for line in metadata_process.stdout:
+                        for line in subler_process.stdout:
                             if stop_event.is_set():
-                                metadata_process.terminate()
+                                subler_process.terminate()
                                 break
                             root.after(0, process_output, line.strip())
 
-                        metadata_process.wait()
+                        subler_process.wait()
 
-                        if metadata_process.returncode == 0:
-                            print("Metadata added successfully")
-                            output_var.set("Metadata Added Successfully!")
-                        else:
-                            output_var.set("Error during metadata addition!")
+                        if subler_process.returncode != 0:
+                            output_var.set("Error adding metadata!")
                             output_label.config(fg="red")
+                            raise Exception("Error adding metadata!")
                             return
+
+                        # Download, conversion, and metadata processes complete
+                        output_var.set("Metadata addition complete!")
+                        progress_bar["value"] = 100
+                        print("Metadata addition complete!")
 
                         submit_button.config(text="Start New Download", command=start_download)
                         disable_inputs(False)
@@ -792,12 +1004,12 @@ def start_download(startingText = "Starting Download..."):
                             for i in range(len(extra_files)):
                                 os.remove(extra_files[i])
                         output_var.set("Video saved successfully!")
-                        if foreign_subs_exist:
-                            output_var.set("Video saved successfully! Foreign subtitles may need adjustment.")
+                        print("Video saved successfully!")
 
                     else:
                         output_var.set("Error during conversion!")
                         output_label.config(fg="red")
+                        raise Exception("Error during conversion!")
 
         except yt_dlp.utils.DownloadCancelled:
             submit_button.config(text="Resume Download", command=lambda: start_download("Resuming Download..."))
@@ -817,6 +1029,73 @@ def start_download(startingText = "Starting Download..."):
     download_thread = threading.Thread(target=download_video, daemon=True)
     download_thread.start()
     submit_button.config(text="Pause Download", fg="blue", command=stop_download)
+
+def stop_download():
+    """Stop the download process."""
+    stop_event.set()
+
+    if download_process:
+        download_process.terminate()
+
+    output_var.set("Pausing Download...")
+
+    # Enable the url input again
+    url_entry.config(state="normal")
+
+def discard_download():
+    """Deletes all files associated with the current download"""
+    url = url_entry.get().strip()
+    hashed_id = hash_url(url)
+    # Find all files containing the hashed_id in their filenames
+    files_to_delete = glob.glob(os.path.join(hidden_folder, f"*{hashed_id}*"))
+
+    for file in files_to_delete:
+        try:
+            os.remove(file)
+            print(f"Deleted: {file}")
+        except Exception as e:
+            print(f"Error deleting {file}: {e}")
+
+    output_var.set("Discarded current download.")
+    update_ui(" ", " ", " ", " ")
+    submit_button.config(text="Start Download", command=start_download)
+    discard_button.pack_forget()
+
+def update_ui_from_queue():
+    """Check the queue for progress updates and update the UI."""
+    try:
+        while True:
+            percentage, file_size, eta, fragments = progress_queue.get_nowait()
+            update_ui(percentage, file_size, eta, fragments)
+    except queue.Empty:
+        root.after(100, update_ui_from_queue)  # Check the queue again after 100ms
+
+def update_ui(percentage, file_size, eta, fragments):
+    """Actually update the ui based on the input"""
+    if percentage == " ":
+        progress_bar["value"] = 0
+        progress_var.set(percentage)
+    else:
+        percent = float(percentage[:-1])
+        progress_bar["value"] = percent
+        progress_var.set(percentage)
+    if fragments:
+        fragment_var.set(fragments)
+    if type(eta) == str:
+        eta = eta
+    else:
+        hours = int(eta // 3600)
+        minutes = int((eta % 3600) // 60)
+        seconds = int(eta % 60)
+        eta = ""
+        if hours > 0:
+            eta += f"{hours}h "
+        if minutes > 0 or hours > 0:  # Only include minutes if hours are present or minutes are non-zero
+            eta += f"{minutes}m "
+        eta += f"{seconds}s"
+    eta_var.set(eta)
+    if file_size:
+        size_var.set(file_size)
 
 def process_output(line):
     """Process the output from yt-dlp."""
@@ -849,286 +1128,15 @@ def process_output(line):
         parts = line.split()
         message = " ".join(parts[1:])
         output_var.set(message)
+    elif "Optimizing..." in line:
+        # This is output from sublercli
+        output_var.set("Optimizing...")
 
     output_label.config(fg="systemTextColor")
 
 
-def makePlist(cast, directors, producers, screenwriters, studios):
 
-	plist_header = """<?xml version="1.0" encoding="UTF-8"?>
-	<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-	<plist version="1.0">
-	<dict>
-	"""
-
-	plist_cast = """	<key>cast</key>
-		<array>
-	"""
-	for i in range(len(cast)):
-		actor = cast[i]
-		plist_cast += f"""		<dict>
-				<key>name</key>
-				<string>{actor}</string>
-			</dict>
-	"""
-	plist_cast += """	</array>
-	"""
-
-	plist_directors = """	<key>directors</key>
-		<array>
-	"""
-	for i in range(len(directors)):
-		director = directors[i]
-		plist_directors += f"""		<dict>
-				<key>name</key>
-				<string>{director}</string>
-			</dict>
-	"""
-	plist_directors += """	</array>
-	"""
-
-	plist_producers = """	<key>producers</key>
-		<array>
-	"""
-	for i in range(len(producers)):
-		producer = producers[i]
-		plist_producers += f"""		<dict>
-				<key>name</key>
-				<string>{producer}</string>
-			</dict>
-	"""
-	plist_producers += """	</array>
-	"""
-
-	plist_screenwriters = """	<key>screenwriters</key>
-		<array>
-	"""
-	for i in range(len(screenwriters)):
-		screenwriter = screenwriters[i]
-		plist_screenwriters += f"""		<dict>
-				<key>name</key>
-				<string>{screenwriter}</string>
-			</dict>
-	"""
-	plist_screenwriters += """	</array>
-	"""
-
-	plist_studio = f"""	<key>studio</key>
-		<string>{studios}</string>
-	"""
-
-	plist_footer = """</dict>
-	</plist>"""
-
-	final_plist = plist_header + plist_cast + plist_directors + plist_producers + plist_screenwriters + plist_studio + plist_footer
-	#print(final_plist)
-	return final_plist
-
-
-def cleanup_old_files():
-    def clean_old_files():
-        now = time.time()
-        age_limit = 24 * 60 * 60  # 1 day
-
-        if not os.path.isdir(hidden_folder):
-            return
-
-        for filename in os.listdir(hidden_folder):
-            file_path = os.path.join(hidden_folder, filename)
-            if filename in {"settings.json"}:
-                continue
-            if os.path.isfile(file_path) and now - os.path.getmtime(file_path) > age_limit:
-                try:
-                    os.remove(file_path)
-                    print(f"Deleted: {file_path}")
-                except Exception as e:
-                    print(f"Failed to delete {file_path}: {e}")
-
-    # Run cleanup in a separate thread
-    cleanup_thread = threading.Thread(target=clean_old_files, daemon=True)
-    cleanup_thread.start()
-    print("cleaning...")
-
-
-def get_subtitles():
-
-    url = "https://api.opensubtitles.com/api/v1/subtitles"
-
-    current_tmdb_id = tmdb_id_entry.get().strip()
-
-    if tv_var.get():
-        # The media is a tv show
-        season = season_entry.get().strip()
-        episode = episode_entry.get().strip()
-        querystring = {"tmdb_id":current_tmdb_id,"languages":"en","season_number":season,"episode_number":episode}
-
-
-    else:
-        # The media is a movie
-        querystring = {"tmdb_id":current_tmdb_id,"languages":"en"}
-
-
-    headers = {
-        "User-Agent": opensubtitles_user_agent,
-        "Api-Key": opensubtitles_key
-    }
-
-    response = requests.get(url, headers=headers, params=querystring)
-
-    print(response.json())
-
-    def get_best_subtitles(subtitle_data):
-        try:
-            if not subtitle_data.get("data"):
-                return None
-
-            subtitles = subtitle_data["data"]
-
-            # Sorting function based on multiple criteria
-            def subtitle_score(sub):
-                attributes = sub.get("attributes")
-                return (
-                    attributes.get("hearing_impaired") == False,  # Prefer non-hearing-impaired
-                    attributes.get("from_trusted", False),        # Prefer from trusted sources
-                    attributes.get("ratings", 0.0),               # Prefer higher ratings
-                    attributes.get("download_count", 0),          # Prefer higher download counts
-                )
-
-            # Sort subtitles with the best one first
-            sorted_subtitles = sorted(subtitles, key=subtitle_score, reverse=True)
-
-            # Find the best foreign parts only subtitle
-            foreign_parts_subs = [
-                sub for sub in subtitles if sub.get("attributes").get("foreign_parts_only", False)
-            ]
-            best_foreign_parts_sub = (
-                sorted(foreign_parts_subs, key=subtitle_score, reverse=True)[0]
-                if foreign_parts_subs else None
-            )
-
-            # Get the best non foreign subtitle
-            non_foreign_parts_subs = [
-                sub for sub in subtitles if not sub.get("attributes").get("foreign_parts_only", False)
-            ]
-            best_non_foreign_parts_sub = (
-                sorted(non_foreign_parts_subs, key=subtitle_score, reverse=True)[0]
-                if non_foreign_parts_subs else None
-            )
-
-            # Return both subtitles if we found a foreign parts subtitle, otherwise just the best one
-            return [best_non_foreign_parts_sub, best_foreign_parts_sub] if best_foreign_parts_sub else [best_non_foreign_parts_sub]
-
-        except:
-            return None
-
-    def clean_subtitles(input_file, output_file):
-        with open(input_file, "r", encoding="utf-8") as infile, open(output_file, "w", encoding="utf-8") as outfile:
-            buffer = []
-            for line in infile:
-                # Remove SSA/ASS positioning tags like {\an8}, but keep text
-                line = re.sub(r"\{\\an\d+\}", "", line)
-
-                # Store non-empty lines in a buffer
-                if line.strip():
-                    buffer.append(line)
-                else:
-                    # If buffer contains a font tag, discard the entire block
-                    if any("<font" in l for l in buffer):
-                        buffer.clear()
-                    else:
-                        outfile.writelines(buffer)
-                        outfile.write("\n")
-                        buffer.clear()
-        # Remove the original file
-        os.remove(input_file)
-
-    def download_subtitles(file_id, file_path):
-        global opensubtitles_token
-        if opensubtitles_token is None:
-            url = "https://api.opensubtitles.com/api/v1/login"
-
-            payload = {
-                "username": "unsightlyPinnipedCalm",
-                "password": "P@ssw0rd"
-            }
-            headers = {
-                "Content-Type": "application/json",
-                "User-Agent": opensubtitles_user_agent,
-                "Accept": "application/json",
-                "Api-Key": opensubtitles_key
-            }
-
-            response = requests.post(url, json=payload, headers=headers)
-            response_dict = response.json()
-            print(response_dict)
-
-            status = response_dict['status']
-            print(status)
-            opensubtitles_token = response_dict['token']
-            print(opensubtitles_token)
-
-        url = "https://api.opensubtitles.com/api/v1/download"
-
-        payload = { "file_id": file_id }
-        headers = {
-            "User-Agent": opensubtitles_user_agent,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Authorization": f"Bearer {opensubtitles_token}",
-            "Api-Key": opensubtitles_key
-        }
-
-        response = requests.post(url, json=payload, headers=headers)
-
-        print(response.json())
-
-        srt_link = response.json()['link']
-
-        # Download it now
-        dl_response = requests.get(srt_link, stream=True)
-        with open(file_path, "wb") as file:
-            for chunk in dl_response.iter_content(chunk_size=8192):
-                file.write(chunk)
-
-        return file_path
-
-
-    best_subtitles = get_best_subtitles(response.json())
-
-    download_url = url_entry.get().strip()
-    hash = hash_url(download_url)
-    temp_sub_path = hidden_folder + "/sub.srt"
-    temp_foreign_sub_path = hidden_folder + "/sub_foreign.srt"
-    sub_path = hidden_folder + "/" + hash + "_sub.srt"
-    sub_foreign_path = hidden_folder + "/" + hash + "_sub_foreign.srt"
-
-    try:
-
-        if not best_subtitles:
-            print("No subtitles available")
-            return {"subtitles": None, "foreign_subtitles": None}
-
-        elif len(best_subtitles) > 1:
-            sub = download_subtitles(best_subtitles[0]['attributes']['files'][0]['file_id'], temp_sub_path)
-            clean_subtitles(sub, sub_path)
-
-            sub_foreign = download_subtitles(best_subtitles[1]['attributes']['files'][0]['file_id'], temp_foreign_sub_path)
-            clean_subtitles(sub_foreign, sub_foreign_path)
-
-            return {"subtitles": sub_path, "foreign_subtitles": sub_foreign_path}
-        else:
-            sub = download_subtitles(best_subtitles[0]['attributes']['files'][0]['file_id'], temp_sub_path)
-            clean_subtitles(sub, sub_path)
-
-            return {"subtitles": sub_path, "foreign_subtitles": None}
-
-    except:
-        return {"subtitles": None, "foreign_subtitles": None}
-
-
-
-
-
+"""Start building the ui of the app"""
 
 # Create the main window
 root = tk.Tk()
@@ -1186,15 +1194,9 @@ tmdb_title_var = tk.StringVar()
 tmdb_title_label = tk.Label(root, bg="#999999", textvariable=tmdb_title_var)
 tmdb_title_label.grid(row=2, column=0, sticky="nsew", columnspan=2, padx=5, pady=5)
 
-# movie_series_title = tk.Label(tmdb_info_frame, text="Unknown Movie Name", bg="#999999")
-# movie_series_title.pack(anchor="center", padx=5)
-#
-# episode_title = tk.Label(tmdb_info_frame, text="Unknown Episode Title", bg="#999999")
-# episode_title.pack(side="left", padx=5)
-
-
 # Ensure widgets are hidden but still taking up space in layout
 def toggle_season_episode():
+    """Displays or hides the season and episode entry boxes"""
     if tv_var.get():
         season_label.pack(side="left", padx=5)
         season_entry.pack(side="left", padx=5)
@@ -1253,6 +1255,7 @@ extension_dropdown.pack(side="left")
 
 # Function to handle extension selection and update settings
 def on_extension_select(*args):
+    """Changes the default settings to convert the video file as the specified format"""
     selected = selected_extension.get()
     print(selected)
     update_settings(file_extension=selected)
@@ -1315,23 +1318,11 @@ size_value.grid(row=10, column=1, sticky="w", padx=5, pady=2)
 tmdb_image_frame = tk.Frame(root, bg="#999999")
 tmdb_image_frame.grid(row=7, column=1, sticky="e", padx=5, pady=2)
 
-# tmdb_title_var = tk.StringVar()
-# tmdb_title_var.set("Title Here")
-# tmdb_title = tk.Label(tmdb_info_display, textvariable=tmdb_title_var)
-# tmdb_title.grid(row=0, column=0, sticky="w", padx=5, pady=2)
-#
-# tmdb_episode_title_var = tk.StringVar()
-# tmdb_episode_title_var.set("Episode Title Here")
-# tmdb_episode_title = tk.Label(tmdb_info_display, textvariable=tmdb_episode_title_var)
-# tmdb_episode_title.grid(row=1, column=0, sticky="w", padx=5, pady=2)
-
+# Thumbnail image in the bottom corner
 image_label = tk.Label(tmdb_image_frame, text="No Thumbnail", width=192, height=108)
 image_label.grid(row=0, column=0, sticky="w", padx=5, pady=2)
 # Bind left-click to change image
 image_label.bind("<Button-1>", lambda event: toggle_image_selection())
-
-# image_button = tk.Button(tmdb_info_display, text="Select Image", command=select_image)
-# image_button.grid(row=1, column=0, sticky="w", padx=5, pady=2)
 
 
 # Frame for scrollable images at the bottom
@@ -1356,15 +1347,9 @@ scrollable_frame.grid_columnconfigure(0, weight=1)  # This will make the column 
 scrollable_frame.grid_forget()  # Hide the frame
 
 
-
-
 def toggle_image_selection(show=None):
     """
     Creates a horizontally scrollable frame at the bottom of the window and populates it with images from the provided URLs.
-
-    Args:
-        root (tk.Tk): The main Tkinter window.
-        image_urls (list): A list of image URLs to be displayed.
     """
     global backdrop_list
     global last_load_id
@@ -1453,9 +1438,6 @@ placeholder_image_path = resource_path("resources/placeholder.png")
 def parse_arguments(url_handler=None):
     """
     Parses command-line arguments and returns structured data.
-
-    Returns:
-        dict: A dictionary containing parsed values.
     """
 
     if url_handler is None:
@@ -1516,7 +1498,6 @@ def parse_arguments(url_handler=None):
 parse_arguments()
 
 # Load default image at startup
-#default_image_path = hidden_folder + "/default.jpg"  # Ensure this file exists in the project directory
 update_image(placeholder_image_path)
 
 # Call the toggle function after initializing
@@ -1528,91 +1509,9 @@ check_and_create_settings()
 # Clean up old files
 cleanup_old_files()
 
-def get_app_bundle_path():
-    """Finds the full path to the .app bundle."""
-    exec_path = os.path.abspath(sys.argv[0])  # Get the full path of the running executable
-    while not exec_path.endswith(".app") and exec_path != "/":
-        exec_path = os.path.dirname(exec_path)  # Move up the directory tree
-
-    if exec_path.endswith(".app"):
-        return exec_path
-    return None  # Not running as an app
-
-def update_info_plist():
-    """Updates the app's Info.plist to include the custom URL scheme."""
-    app_bundle_path = get_app_bundle_path()
-    if not app_bundle_path:
-        #url_entry.insert(0, "Not running as an app bundle.")
-        print("Not running as an app bundle.")
-        return
-
-    plist_path = os.path.join(app_bundle_path, "Contents", "Info.plist")
-
-    if not os.path.exists(plist_path):
-        print("Info.plist not found!")
-        #url_entry.insert(0, "Info.plist not found! " + plist_path)
-        return
-
-    try:
-        with open(plist_path, "rb") as f:
-            plist_data = plistlib.load(f)
-
-        # Ensure CFBundleURLTypes is present
-        if "CFBundleURLTypes" not in plist_data:
-            plist_data["CFBundleURLTypes"] = []
-
-        # Define the custom URL scheme
-        custom_scheme = {
-            "CFBundleURLName": "com.yourcompany.StreamFetchTagger",
-            "CFBundleURLSchemes": ["StreamFetchTagger"]
-        }
-
-        # Avoid duplicate entries
-        if custom_scheme not in plist_data["CFBundleURLTypes"]:
-            plist_data["CFBundleURLTypes"].append(custom_scheme)
-
-            with open(plist_path, "wb") as f:
-                plistlib.dump(plist_data, f)
-
-            print(f"Updated Info.plist at {plist_path}")
-            #url_entry.insert(0, f"Updated Info.plist at {plist_path}")
-
-    except Exception as e:
-        print(f"Failed to update Info.plist: {e}")
-        #url_entry.insert(0, f"Failed to update Info.plist: {e}")
-
-def register_url_scheme():
-    """Registers the custom URL scheme with macOS."""
-    app_bundle_path = get_app_bundle_path()
-    if not app_bundle_path:
-        print("Not running as an app bundle. Skipping registration.")
-        return
-
-    try:
-        subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
-                        "-f", app_bundle_path], check=True)
-        print("Successfully registered URL scheme.")
-    except Exception as e:
-        print(f"Error registering URL scheme: {e}")
-
-# Automatically register the custom url scheme
-if get_app_bundle_path():
-        update_info_plist()
-        register_url_scheme()
-
 
 root.createcommand("::tk::mac::LaunchURL", parse_arguments)
 
-# if len(sys.argv) > 1:
-#     incoming_url = sys.argv[1]
-#     if incoming_url.startswith("StreamFetchTagger://"):
-#         url_entry.insert(0, incoming_url)
-#     else:
-#         print("No valid URL scheme detected.")
-#         url_entry.insert(0, "No valid URL scheme detected.")
-# else:
-#     print("No arguments provided.")
-#     url_entry.insert(0, "No arguments provided. " + sys.argv[0])
 
 # After initialization, start the queue checking
 root.after(100, update_ui_from_queue)

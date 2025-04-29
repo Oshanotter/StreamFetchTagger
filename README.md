@@ -2,12 +2,12 @@
 
 <img align="left" height="65vw" src="resources/StreamFetchTagger_icon_cropped.png">
 
-A MacOS app built with Python that allows you to automatically download and tag media. StreamFetchTagger is built with Python and utilizes yt-dlp, ffmpeg, ffprobe, AtomicParsley, MP4Box, as well as several Python modules and packages.
+A MacOS app built with Python that allows you to automatically download and tag media. StreamFetchTagger is built with Python and utilizes yt-dlp, ffmpeg, SublerCLI, MP4Box, as well as several Python modules and packages.
 
 </br>
 
 > [!NOTE]  
-> This currently has only been tested using a M1 MacBook Air, but it should work on other arm based MacOS machines as well. Small modification may be made for this Python code to run on other machines as well.
+> This currently has only been tested using a M1 MacBook Air, but it should work on other arm based MacOS machines as well. Small modifications may be made for this Python code to run on other machines as well.
 
 > [!IMPORTANT]  
 > Your computer may say that the app cannot be run because it is not from a trusted developer. In order to bypass this, you will need to go into `System Settings > Privacy & Security > StreamFetchTagger`, and click `Open Anyway`.
@@ -57,8 +57,7 @@ To compile this code into an app yourself, you will need PyInstaller installed o
 ```sh
 pyinstaller --onefile --windowed --name "StreamFetchTagger" \
   --add-binary "binaries/ffmpeg:./binaries" \
-  --add-binary "binaries/ffprobe:./binaries" \
-  --add-binary "binaries/AtomicParsley:./binaries" \
+  --add-binary "binaries/SublerCLI:./binaries" \
   --add-binary "binaries/MP4Box:./binaries" \
   --add-data "resources/placeholder.png:./resources" \
   --icon="resources/icon.icns" \
@@ -68,8 +67,7 @@ or run this command to compile it in one directory:
 ```sh
 pyinstaller --onedir --windowed --name "StreamFetchTagger" \
   --add-binary "binaries/ffmpeg:./binaries" \
-  --add-binary "binaries/ffprobe:./binaries" \
-  --add-binary "binaries/AtomicParsley:./binaries" \
+  --add-binary "binaries/SublerCLI:./binaries" \
   --add-binary "binaries/MP4Box:./binaries" \
   --add-data "resources/placeholder.png:./resources" \
   --icon="resources/icon.icns" \
@@ -104,17 +102,8 @@ Only Launch App: `StreamFetchTagger://`
 
 ## Limitations
 
-The only limitations I am aware of so far are the fact that only one window can be opened at a time and that foreign subtitles cannot be set to be forced.  
+The only limitation I am aware of so far is the fact that only one window can be opened at a time.  
 I will try to implement multiple windows for downloading more than one video at a time soon.  
-As for the forced foreign subtitles, I have attempted many different methods to accomplish this automatically, but the best solution as of now is to use the Subler app and adjust the subtitles as needed that way. I have tried using MP4Box with the following command, which gets us very close to the desired result, but it still doesn't work as expected:  
-```sh
-MP4Box input.m4v \
-       -add subs.srt:hdlr=sbtl:lang=eng:group=2:layer=-1:disabled \
-       -add foreign_subs.srt:hdlr=sbtl:lang=eng:group=2:layer=-1:txtflags=0xC0000000 \
-       -udta 4:type=tagc:str=public.main-program-content \
-       -udta 3:type=tagc:str=public.auxiliary-content \
-       -out output.m4v -flat
-```
 
 ## License
 
@@ -125,4 +114,4 @@ See the [LICENSE](./LICENSE) file for more details.
 
 I do not condone or encourage the unauthorized downloading of copyrighted materials. Any such activity is the sole responsibility of the user.  
 
-I do not claim ownership of or authorship for yt-dlp, ffmpeg, ffprobe, AtomicParsley, MP4Box, or any other Python modules and packages used in this project. I extend my gratitude to the developers of these projects for providing the tools that made this project possible.  
+I do not claim ownership of or authorship for yt-dlp, ffmpeg, SublerCLI, MP4Box, or any other Python modules and packages used in this project. I extend my gratitude to the developers of these projects for providing the tools that made this project possible.  
