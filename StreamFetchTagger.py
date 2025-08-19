@@ -158,7 +158,8 @@ def retrieve_tmdb_data(event=None):
                     # Delete any existing text in the filename_entry box
                     filename_entry.delete(0, tk.END)
                     # Insert new text
-                    filename_entry.insert(0, f"{tv_show} - S{season}E{episode}")
+                    default_filename = replace_for_default_filename(tv_show, release_date, name, episode, season)
+                    filename_entry.insert(0, default_filename)
                 else:
                     filename_entry.delete(0, tk.END)
                     filename_entry.insert(0, "Untitled")
@@ -205,7 +206,8 @@ def retrieve_tmdb_data(event=None):
                     # Delete any existing text in the filename_entry box
                     filename_entry.delete(0, tk.END)
                     # Insert new text
-                    filename_entry.insert(0, f"{name}")
+                    default_filename = replace_for_default_filename(name, release_date)
+                    filename_entry.insert(0, default_filename)
                 else:
                     filename_entry.delete(0, tk.END)
                     filename_entry.insert(0, "Untitled")
@@ -311,6 +313,25 @@ def retrieve_tmdb_data(event=None):
             print(f"Error: {e}")
 
     debounce_timer = root.after(500, lambda: threading.Thread(target=retrieve_data, daemon=True).start())
+
+def replace_for_default_filename(title, release_date, episode_name=None, episode=None, season=None):
+    # replaces the default filename with the given parameters
+    settings = check_and_create_settings()
+    if episode_name and episode and season:
+        default_filename = settings.get("default_tv_show_filename")
+    else:
+        default_filename = settings.get("default_movie_filename")
+
+    year = release_date[:4]
+
+    new_filename = re.sub(r'<title>', title, default_filename)
+    new_filename = re.sub(r'<year>', year, new_filename)
+    if episode_name and episode and season:
+        new_filename = re.sub(r'<episode_name>', episode_name, new_filename)
+        new_filename = re.sub(r'<episode_number>', episode, new_filename)
+        new_filename = re.sub(r'<season_number>', season, new_filename)
+
+    return new_filename
 
 def download_thumbnail():
     """Downloads the thumbnail for the tmdb id based on the thumbnail_image_path_or_url"""
@@ -630,7 +651,9 @@ def check_and_create_settings():
     # Default values for settings
     default_settings = {
         "download_folder": home_folder,
-        "file_extension": ".mp4"
+        "file_extension": ".mp4",
+        "default_movie_filename": "<title> (<year>)",
+        "default_tv_show_filename": "S<season_number>E<episode_number> - <title>"
     }
 
     # Check if settings.json exists
@@ -646,16 +669,31 @@ def check_and_create_settings():
         with open(settings_file, 'r') as f:
             settings = json.load(f)
 
+        # Merge old settings an new settings
+        updated = False
+        for key, value in default_settings.items():
+            if key not in settings:
+                settings[key] = value
+                updated = True
+
+        # If new keys were added, save updated file
+        if updated:
+            with open(settings_file, 'w') as f:
+                json.dump(settings, f, indent=4)
+            print("settings.json updated with new default keys.")
+
     download_folder = settings.get("download_folder")
     file_extension = settings.get("file_extension")
 
     print(f"Loaded settings: Download folder: {download_folder}, File extension: {file_extension}")
 
-    # Apply the settings (this will depend on your specific select_folder and select_extension functions)
-    select_folder(download_folder)  # Update the folder in your app
-    selected_extension.set(file_extension)  # Update the file extension in your app
+    # Apply the settings
+    select_folder(download_folder)  # Update the folder
+    selected_extension.set(file_extension)  # Update the file extension
 
-def update_settings(download_folder=None, file_extension=None):
+    return settings
+
+def update_settings(download_folder=None, file_extension=None, default_movie_filename=None, default_tv_show_filename=None):
     """Updates the settings in the settings.json file, given the download folder path and the file extension of the video."""
     settings_file = os.path.join(hidden_folder, "settings.json")
 
@@ -672,6 +710,12 @@ def update_settings(download_folder=None, file_extension=None):
 
     if file_extension:
         settings["file_extension"] = file_extension
+
+    if default_movie_filename:
+        settings["default_movie_filename"] = default_movie_filename
+
+    if default_tv_show_filename:
+        settings["default_tv_show_filename"] = default_tv_show_filename
 
     # Save updated settings back to the file
     with open(settings_file, 'w') as f:
@@ -1263,9 +1307,61 @@ def on_extension_select(*args):
 # Bind the selection event to the dropdown
 selected_extension.trace("w", on_extension_select)
 
+filename_settings_frame = None
+# Function to display the filename settings tab
+def display_filename_settings():
+    global filename_settings_frame
+    print("filename settings button pushed")
+    if filename_settings_frame == None:
+        filename_settings_frame = tk.Frame(root, bg="#999999")
+        filename_settings_frame.grid(row=5, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
+
+        settings = check_and_create_settings()
+
+        default_movie_name_label = tk.Label(filename_settings_frame, text="Default TV Show Filename:", bg="#999999")
+        default_movie_name_label.grid(row=0, column=0, padx=(5, 5), pady=10)
+        default_movie_name_entry = tk.Entry(filename_settings_frame, width=40)
+        default_movie_name_entry.grid(row=0, column=1, padx=(3, 0), pady=10)
+        default_movie_name_entry.insert(0, settings.get("default_movie_filename"))
+
+        default_tv_show_name_label = tk.Label(filename_settings_frame, text="Default Movie Filename:", bg="#999999")
+        default_tv_show_name_label.grid(row=1, column=0, padx=(0, 10), pady=10)
+        default_tv_show_name_entry = tk.Entry(filename_settings_frame, width=40)
+        default_tv_show_name_entry.grid(row=1, column=1, padx=(3, 0), pady=10)
+        default_tv_show_name_entry.insert(0, settings.get("default_tv_show_filename"))
+
+        available_tags_label = tk.Label(filename_settings_frame, text="Available Tags:    <title> <year> <episode_name> <episode_number> <season_number>", bg="#999999")
+        available_tags_label.grid(row=2, column=0, padx=(5, 0), pady=10, columnspan=2)
+
+        default_filename_button.config(text="Save Settings")
+
+    else:
+        # The frame does exist, so delete it and save the settings
+
+        # Get the entries from the frame
+        entries = [child for child in filename_settings_frame.winfo_children() if isinstance(child, tk.Entry)]
+        default_movie_name_entry = entries[0]
+        default_tv_show_name_entry = entries[1]
+        default_movie_filename = default_movie_name_entry.get()
+        default_tv_show_filename = default_tv_show_name_entry.get()
+
+        filename_settings_frame.grid_forget()
+        filename_settings_frame = None
+
+        update_settings(default_movie_filename=default_movie_filename, default_tv_show_filename=default_tv_show_filename)
+
+        default_filename_button.config(text="Filename Settings")
+
+        retrieve_tmdb_data()
+
+# Create the filename settings button
+default_filename_button = tk.Button(filename_frame, text="Filename Settings", command=display_filename_settings)
+default_filename_button.pack(side="left", padx=(100, 0))
+
+
 # Submit and Discard buttons (side by side)
 button_frame = tk.Frame(root)
-button_frame.grid(row=5, column=0, columnspan=2, pady=10, padx=10, sticky="w")
+button_frame.grid(row=6, column=0, columnspan=2, pady=10, padx=10, sticky="w")
 
 submit_button = tk.Button(button_frame, text="Start Download", default="active", command=start_download)
 submit_button.pack(side="left", padx=(0, 5))
@@ -1280,43 +1376,43 @@ output_label.pack(side="left")
 
 # Progress bar widget
 progress_bar = ttk.Progressbar(root, orient="horizontal", length=300, mode="determinate")
-progress_bar.grid(row=6, column=0, pady=0, padx=10, sticky="w")
+progress_bar.grid(row=7, column=0, pady=0, padx=10, sticky="w")
 
 progress_frame = tk.Frame(root)
-progress_frame.grid(row=7, column=0, sticky="w", padx=5, pady=2)
+progress_frame.grid(row=8, column=0, sticky="w", padx=5, pady=2)
 
 # Progress information labels
 progress_label = tk.Label(progress_frame, text="Downloading:")
-progress_label.grid(row=7, column=0, sticky="w", padx=10, pady=2)
+progress_label.grid(row=8, column=0, sticky="w", padx=10, pady=2)
 
 fragment_label = tk.Label(progress_frame, text="Fragments:")
-fragment_label.grid(row=8, column=0, sticky="w", padx=10, pady=2)
+fragment_label.grid(row=9, column=0, sticky="w", padx=10, pady=2)
 
 eta_label = tk.Label(progress_frame, text="ETA:")
-eta_label.grid(row=9, column=0, sticky="w", padx=10, pady=2)
+eta_label.grid(row=10, column=0, sticky="w", padx=10, pady=2)
 
 size_label = tk.Label(progress_frame, text="Estimated File Size:")
-size_label.grid(row=10, column=0, sticky="w", padx=10, pady=2)
+size_label.grid(row=11, column=0, sticky="w", padx=10, pady=2)
 
 # Progress information values (separate column for alignment)
 progress_var = tk.StringVar()
 progress_value = tk.Label(progress_frame, textvariable=progress_var)
-progress_value.grid(row=7, column=1, sticky="w", padx=5, pady=2)
+progress_value.grid(row=8, column=1, sticky="w", padx=5, pady=2)
 
 fragment_var = tk.StringVar()
 fragment_value = tk.Label(progress_frame, textvariable=fragment_var)
-fragment_value.grid(row=8, column=1, sticky="w", padx=5, pady=2)
+fragment_value.grid(row=9, column=1, sticky="w", padx=5, pady=2)
 
 eta_var = tk.StringVar()
 eta_value = tk.Label(progress_frame, textvariable=eta_var)
-eta_value.grid(row=9, column=1, sticky="w", padx=5, pady=2)
+eta_value.grid(row=10, column=1, sticky="w", padx=5, pady=2)
 
 size_var = tk.StringVar()
 size_value = tk.Label(progress_frame, textvariable=size_var)
-size_value.grid(row=10, column=1, sticky="w", padx=5, pady=2)
+size_value.grid(row=11, column=1, sticky="w", padx=5, pady=2)
 
 tmdb_image_frame = tk.Frame(root, bg="#999999")
-tmdb_image_frame.grid(row=7, column=1, sticky="e", padx=5, pady=2)
+tmdb_image_frame.grid(row=8, column=1, sticky="e", padx=5, pady=2)
 
 # Thumbnail image in the bottom corner
 image_label = tk.Label(tmdb_image_frame, text="No Thumbnail", width=192, height=108)
@@ -1327,7 +1423,7 @@ image_label.bind("<Button-1>", lambda event: toggle_image_selection())
 
 # Frame for scrollable images at the bottom
 scrollable_frame = tk.Frame(root)
-scrollable_frame.grid(row=11, column=0, sticky="ew", padx=5, pady=5, columnspan=2)
+scrollable_frame.grid(row=12, column=0, sticky="ew", padx=5, pady=5, columnspan=2)
 
 # Canvas for scrolling functionality
 canvas = tk.Canvas(scrollable_frame, height=60, width=600, bg='#999999', bd=0, highlightthickness=0)  # Set height of the canvas
