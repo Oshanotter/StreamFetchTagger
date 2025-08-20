@@ -17,7 +17,7 @@ from PIL import ImageTk, Image
 from io import BytesIO
 
 app_name = "StreamFetchTagger"
-app_version = "1.1.0"
+app_version = "1.2.0"
 tmdb_key = "9de437782139633fe25c0d307d5da137"
 opensubtitles_token = None
 opensubtitles_key = "lhUi4siT3Y6pbCI0qkCNNJG48q1mzXLT"
@@ -339,8 +339,16 @@ def download_thumbnail():
     print(thumbnail_image_path_or_url)
 
     if "http" not in thumbnail_image_path_or_url:
-        print("thumbnail_image_path_or_url is already downloaded")
-        return
+        print("thumbnail_image_path_or_url is not a url")
+        if os.path.exists(thumbnail_image_path_or_url):
+            print("thumbnail_image_path_or_url is already downloaded")
+            return
+        else:
+            thumbnail_image_path_or_url = image_label.original_file_path_or_url or ""
+            if "http" not in thumbnail_image_path_or_url and not os.path.exists(thumbnail_image_path_or_url):
+                update_image(placeholder_image_path)
+            download_thumbnail()
+            return
 
     # Determine file extension from URL
     ext = os.path.splitext(thumbnail_image_path_or_url)[-1] or ".jpg"
@@ -417,6 +425,7 @@ def update_image(file_path_or_url):
     global thumbnail_image  # Prevent garbage collection
     global thumbnail_image_path_or_url
     thumbnail_image_path_or_url = file_path_or_url
+    image_label.original_file_path_or_url = file_path_or_url
     scrollable_frame.grid_forget()  # Hide the frame
     try:
         # If it's a URL, fetch the image from the URL
@@ -768,6 +777,9 @@ def disable_inputs(disable=True):
     folder_button.config(state=str)
     filename_entry.config(state=str)
     extension_dropdown.config(state=str)
+    default_filename_button.config(state=str)
+    # Also close the default filename settings
+    display_filename_settings(False)
 
 def cleanup_old_files():
     """Deletes files older than 1 day in the hidden_folder to save space"""
@@ -867,19 +879,61 @@ def start_download(startingText = "Starting Download..."):
 
     def download_video():
         global download_process
+        global original_file
         try:
-            # Prepare yt-dlp options
-            ydl_opts = {
-                'format': 'best',  # Download the best quality
-                'outtmpl': download_path,  # Path where the file will be saved
-                'progress_hooks': [lambda d: progress_hook(d)],  # Progress hook with stop_event
-                'quiet': False  # Show output to the console
-                #'ffmpeg_location': FFMPEG_PATH,  # Ensure ffmpeg is found
-            }
+            if url.startswith(("http://", "https://")):
+                # Prepare yt-dlp options
+                ydl_opts = {
+                    'format': 'best',  # Download the best quality
+                    'outtmpl': download_path,  # Path where the file will be saved
+                    'progress_hooks': [lambda d: progress_hook(d)],  # Progress hook with stop_event
+                    'quiet': False  # Show output to the console
+                    #'ffmpeg_location': FFMPEG_PATH,  # Ensure ffmpeg is found
+                }
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Start the download
-                download_process = ydl.download([url])
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    # Start the download
+                    download_process = ydl.download([url])
+
+            else:
+                # The url might be a filepath
+                if os.path.exists(url):
+                    # Copy the file from the url path to the hidden_folder with the name of the url hash
+                    print("filepath exists")
+                    print(url)
+
+                    ext = os.path.splitext(url)[1]
+                    new_filename = f"{hashed_id}{ext}"
+                    destination = os.path.join(hidden_folder, new_filename)
+
+                    # Copy file manually
+                    # Copy using FFmpeg to get rid of unwanted streams
+                    copy_command = [FFMPEG_PATH, "-i", url, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", destination, "-y"]
+                    copy_process = subprocess.Popen(
+                        copy_command,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                    )
+
+                    for line in copy_process.stderr:
+                        if stop_event.is_set():
+                            conpy_process.terminate()
+                            break
+                        root.after(0, process_output, line.strip())
+                        #output_var.set(line.strip())
+
+                    copy_process.wait()
+
+                    if copy_process.returncode == 0:
+                        # Success
+                        print(f"File copied to {destination}")
+                        original_file = destination
+                    else:
+                        #Error
+                        raise Exception("Error scanning file")
+
+
+                else:
+                    raise Exception("Invalid URL or File Path")
 
             # Once download finishes, handle file renaming and conversion
             if not stop_event.is_set():
@@ -899,7 +953,7 @@ def start_download(startingText = "Starting Download..."):
 
                 downloaded_files = glob.glob(os.path.join(hidden_folder, f"{hashed_id}.*"))
                 if downloaded_files:
-                    global original_file
+                    #global original_file
                     ext = os.path.splitext(original_file)[1]
                     temp_file = f'{hidden_folder}/{hashed_id}_temp{file_extension}'
                     new_file = f'{hidden_folder}/{user_filename}{file_extension}'
@@ -912,8 +966,8 @@ def start_download(startingText = "Starting Download..."):
                     # print(subtitle_paths)
 
                     global thumbnail_image_path_or_url
+                    download_thumbnail()
                     if thumbnail_image_path_or_url != placeholder_image_path:
-                        download_thumbnail()
                         print("artwork is not default")
                         ffmpeg_command = [FFMPEG_PATH, '-i', original_file, '-i', thumbnail_image_path_or_url, '-map', '0', '-map', '1', '-c:v', 'copy', '-c:a', 'copy', '-disposition:v:1', 'attached_pic', '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', 'faststart', temp_file, '-y']
                     else:
@@ -998,13 +1052,19 @@ def start_download(startingText = "Starting Download..."):
                             mp4box_command = mp4box_command_start + regular_subs_command + mp4box_command_end
                         elif subs_foreign:
                             mp4box_command = mp4box_command_start + foreign_subs_command + mp4box_command_end
+                        else:
+                            mp4box_command = None
 
-                        mp4box_out = subprocess.run(mp4box_command, capture_output=True, text=True)
-                        if mp4box_out.returncode != 0:
-                            output_var.set("Error adding subtitles!")
-                            output_label.config(fg="red")
-                            raise Exception("Error adding subtitles!")
-                            return
+                        if mp4box_command:
+                            mp4box_out = subprocess.run(mp4box_command, capture_output=True, text=True)
+                            if mp4box_out.returncode != 0:
+                                output_var.set("Error adding subtitles!")
+                                output_label.config(fg="red")
+                                raise Exception("Error adding subtitles!")
+                                return
+                        else:
+                            # Rename the temp_file to new_file
+                            os.rename(temp_file, new_file)
 
 
                         # Use sublercli to add the metadata that ffmpeg and mp4box cannot, and optimize and organizegroups
@@ -1309,10 +1369,10 @@ selected_extension.trace("w", on_extension_select)
 
 filename_settings_frame = None
 # Function to display the filename settings tab
-def display_filename_settings():
+def display_filename_settings(bool=True):
     global filename_settings_frame
     print("filename settings button pushed")
-    if filename_settings_frame == None:
+    if filename_settings_frame == None and bool == True:
         filename_settings_frame = tk.Frame(root, bg="#999999")
         filename_settings_frame.grid(row=5, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
 
@@ -1336,7 +1396,9 @@ def display_filename_settings():
         default_filename_button.config(text="Save Settings")
 
     else:
-        # The frame does exist, so delete it and save the settings
+        # The frame might exist, so delete it and save the settings
+        if filename_settings_frame == None:
+            return
 
         # Get the entries from the frame
         entries = [child for child in filename_settings_frame.winfo_children() if isinstance(child, tk.Entry)]
