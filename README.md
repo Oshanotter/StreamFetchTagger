@@ -92,11 +92,11 @@ Only Launch App: `StreamFetchTagger://`
 ## Images
 
 <p align="left">
-  <img src="https://i.imgur.com/AsHr3m7.png" width="400vw" />
+  <img src="https://i.imgur.com/qDID9GJ.png" width="400vw" />
   <strong>Downloading a movie</strong>
   <br>
   <br>
-  <img src="https://i.imgur.com/f84gFOl.png" width="400vw" />
+  <img src="https://i.imgur.com/6tDaVt3.png" width="400vw" />
   <strong>Downloading a tv show while choosing the thumbnail</strong>
 </p>
 

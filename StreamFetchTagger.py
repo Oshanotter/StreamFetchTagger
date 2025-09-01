@@ -17,7 +17,7 @@ from PIL import ImageTk, Image
 from io import BytesIO
 
 app_name = "StreamFetchTagger"
-app_version = "1.2.0"
+app_version = "1.3.0"
 tmdb_key = "9de437782139633fe25c0d307d5da137"
 opensubtitles_token = None
 opensubtitles_key = "lhUi4siT3Y6pbCI0qkCNNJG48q1mzXLT"
@@ -529,7 +529,7 @@ def get_subtitles():
         except:
             return None
 
-    def clean_subtitles(input_file, output_file, foreign_only=False):
+    def clean_subtitles(input_file, output_file, foreign_only=False, remove=True):
         with open(input_file, "r", encoding="utf-8") as infile, open(output_file, "w", encoding="utf-8") as outfile:
             buffer = []
             an8_present = False
@@ -565,7 +565,8 @@ def get_subtitles():
                         buffer.clear()
                         an8_present = False  # reset for next block
 
-        os.remove(input_file)
+        if remove:
+            os.remove(input_file)
 
     def download_subtitles(file_id, file_path):
         global opensubtitles_token
@@ -617,6 +618,53 @@ def get_subtitles():
 
         return file_path
 
+    def combine_srt(regular_path, forced_path, output_path):
+        # regex to match srt timestamp lines
+        timestamp_pattern = re.compile(r"(\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3})")
+
+        def parse_srt(path, forced=False):
+            """parse srt into list of (start_time, entry_text)"""
+            with open(path, "r", encoding="utf-8-sig") as f:
+                content = f.read().strip()
+            blocks = content.split("\n\n")
+
+            entries = []
+            for block in blocks:
+                lines = block.splitlines()
+                if len(lines) < 2:
+                    continue
+                timestamp_line = lines[1]
+                if not timestamp_pattern.match(timestamp_line):
+                    continue
+
+                # add !!! for forced subtitles
+                if forced:
+                    timestamp_line += " !!!"
+
+                # store for sorting
+                entries.append((timestamp_line.split(" --> ")[0], "\n".join(lines[1:])))
+            return entries
+
+        # parse both files
+        regular_entries = parse_srt(regular_path, forced=False)
+        forced_entries = parse_srt(forced_path, forced=True)
+
+        # merge & sort by start time
+        all_entries = regular_entries + forced_entries
+        all_entries.sort(key=lambda e: e[0])  # sort by start time
+
+        # rebuild new srt with renumbered indices
+        output_lines = []
+        for i, (_, entry_text) in enumerate(all_entries, start=1):
+            output_lines.append(str(i))
+            output_lines.append(entry_text)
+            output_lines.append("")  # blank line separator
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(output_lines).strip())
+
+        print(f"Combined SRT written to {output_path}")
+
 
     best_subtitles = get_best_subtitles(response.json())
 
@@ -626,26 +674,72 @@ def get_subtitles():
     temp_foreign_sub_path = hidden_folder + "/" + hash + "_temp_sub_foreign.srt"
     sub_path = hidden_folder + "/" + hash + "_sub.srt"
     sub_foreign_path = hidden_folder + "/" + hash + "_sub_foreign.srt"
+    combined_subs_path = hidden_folder + "/" + hash + "_sub_combined.srt"
 
     try:
 
-        if not best_subtitles:
-            print("No subtitles available")
-            return {"subtitles": None, "foreign_subtitles": None}
+        global regular_subtitle_path
+        global foreign_subtitle_path
+
+        if regular_subtitle_path != "Download" and foreign_subtitle_path != "Download":
+            clean_subtitles(regular_subtitle_path, sub_path, remove=False)
+            clean_subtitles(foreign_subtitle_path, sub_foreign_path, foreign_only=True, remove=False)
+            return_dict = {"subtitles": sub_path, "foreign_subtitles": sub_foreign_path}
+
+        elif not best_subtitles:
+            if regular_subtitle_path != "Download":
+                clean_subtitles(regular_subtitle_path, sub_path, remove=False)
+                reg_subs = sub_path
+            else:
+                reg_subs = None
+            if foreign_subtitle_path != "Download":
+                clean_subtitles(foreign_subtitle_path, sub_foreign_path, foreign_only=True, remove=False)
+                fore_subs = sub_foreign_path
+            else:
+                fore_subs = None
+
+            #print("No subtitles available")
+            return_dict = {"subtitles": reg_subs, "foreign_subtitles": fore_subs}
 
         elif len(best_subtitles) > 1:
-            sub = download_subtitles(best_subtitles[0]['attributes']['files'][0]['file_id'], temp_sub_path)
-            clean_subtitles(sub, sub_path)
+            if regular_subtitle_path != "Download":
+                clean_subtitles(regular_subtitle_path, sub_path, remove=False)
+            else:
+                sub = download_subtitles(best_subtitles[0]['attributes']['files'][0]['file_id'], temp_sub_path)
+                clean_subtitles(sub, sub_path)
 
-            sub_foreign = download_subtitles(best_subtitles[1]['attributes']['files'][0]['file_id'], temp_foreign_sub_path)
-            clean_subtitles(sub_foreign, sub_foreign_path, foreign_only=True)
+            if foreign_subtitle_path != "Download":
+                clean_subtitles(foreign_subtitle_path, sub_foreign_path, foreign_only=True, remove=False)
+            else:
+                sub_foreign = download_subtitles(best_subtitles[1]['attributes']['files'][0]['file_id'], temp_foreign_sub_path)
+                clean_subtitles(sub_foreign, sub_foreign_path, foreign_only=True)
 
-            return {"subtitles": sub_path, "foreign_subtitles": sub_foreign_path}
+            return_dict = {"subtitles": sub_path, "foreign_subtitles": sub_foreign_path}
         else:
-            sub = download_subtitles(best_subtitles[0]['attributes']['files'][0]['file_id'], temp_sub_path)
-            clean_subtitles(sub, sub_path)
+            if regular_subtitle_path != "Download":
+                clean_subtitles(regular_subtitle_path, sub_path, remove=False)
+            else:
+                sub = download_subtitles(best_subtitles[0]['attributes']['files'][0]['file_id'], temp_sub_path)
+                clean_subtitles(sub, sub_path)
 
-            return {"subtitles": sub_path, "foreign_subtitles": None}
+            if foreign_subtitle_path != "Download":
+                clean_subtitles(foreign_subtitle_path, sub_foreign_path, foreign_only=True, remove=False)
+                fore_subs = sub_path
+            else:
+                fore_subs = None
+
+            return_dict = {"subtitles": sub_path, "foreign_subtitles": fore_subs}
+
+        if combine_subs_var.get():
+            regular_subs = return_dict['subtitles']
+            foreign_subs = return_dict['foreign_subtitles']
+            if regular_subs == None or foreign_subs == None:
+                return return_dict
+            else:
+                combine_srt(regular_subs, foreign_subs, combined_subs_path)
+                return {"subtitles": combined_subs_path, "foreign_subtitles": return_dict['foreign_subtitles']}
+        else:
+            return return_dict
 
     except:
         return {"subtitles": None, "foreign_subtitles": None}
@@ -777,6 +871,10 @@ def disable_inputs(disable=True):
     folder_button.config(state=str)
     filename_entry.config(state=str)
     extension_dropdown.config(state=str)
+    subtitle_button.config(state=str)
+    foreign_subtitle_button.config(state=str)
+    clear_button.config(state=str)
+    combine_subs_checkbox.config(state=str)
     default_filename_button.config(state=str)
     # Also close the default filename settings
     display_filename_settings(False)
@@ -829,6 +927,8 @@ def start_download(startingText = "Starting Download..."):
     stop_event.clear()
     discard_button.pack_forget()
     hashed_id = hash_url(url)
+    print("hashed_id")
+    print(hashed_id)
 
     user_filename = filename_entry.get().strip()
     if not user_filename:
@@ -873,7 +973,8 @@ def start_download(startingText = "Starting Download..."):
             eta = "Done"
             fragments = None
             global original_file
-            original_file = d.get('filename')
+            #original_file = d.get('filename')
+            original_file = d['info_dict']['filename']
             root.after(0, update_ui, percent, file_size, eta, fragments)
             output_var.set("Download Finished!")
 
@@ -884,11 +985,12 @@ def start_download(startingText = "Starting Download..."):
             if url.startswith(("http://", "https://")):
                 # Prepare yt-dlp options
                 ydl_opts = {
-                    'format': 'best',  # Download the best quality
+                    'format': 'best/bestvideo+bestaudio',  # Download the best quality
                     'outtmpl': download_path,  # Path where the file will be saved
                     'progress_hooks': [lambda d: progress_hook(d)],  # Progress hook with stop_event
-                    'quiet': False  # Show output to the console
-                    #'ffmpeg_location': FFMPEG_PATH,  # Ensure ffmpeg is found
+                    'quiet': False,  # Show output to the console
+                    'skip_unavailable_fragments': False,  # Give an error if a fragment is unavailable
+                    'ffmpeg_location': FFMPEG_PATH,  # Ensure ffmpeg is found
                 }
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -1326,9 +1428,68 @@ def toggle_season_episode():
 # Bind the radio button change event to the toggle function
 tv_var.trace("w", lambda *args: toggle_season_episode())
 
+def select_subtitle():
+    global regular_subtitle_path
+    file_path = filedialog.askopenfilename(
+        title="Select subtitle file",
+        filetypes=[("Subtitle files", "*.srt")]  # only show .srt
+    )
+    if file_path:
+        regular_subtitle_path = file_path
+        subtitle_regular_var.set(regular_subtitle_path)
+
+def select_foreign_subtitle():
+    global foreign_subtitle_path
+    file_path = filedialog.askopenfilename(
+        title="Select subtitle file",
+        filetypes=[("Subtitle files", "*.srt")]  # only show .srt
+    )
+    if file_path:
+        foreign_subtitle_path = file_path
+        subtitle_foreign_var.set(foreign_subtitle_path)
+
+def clear_subtitle_paths():
+    global regular_subtitle_path
+    global foreign_subtitle_path
+    regular_subtitle_path = "Download"
+    foreign_subtitle_path = "Download"
+    subtitle_regular_var.set(regular_subtitle_path)
+    subtitle_foreign_var.set(foreign_subtitle_path)
+
+# Subtitle selection frame
+subtitle_selection_frame = tk.Frame(root)
+subtitle_selection_frame.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
+subtitle_label = tk.Label(subtitle_selection_frame, text="Subtitles: ")
+subtitle_label.grid(row=0, column=0, sticky="w", padx=5, pady=5)
+clear_button = tk.Button(subtitle_selection_frame, text="Clear", command=clear_subtitle_paths)
+clear_button.grid(row=0, column=1, sticky="w", padx=5, pady=1)
+combine_subs_var = tk.IntVar()  # variable to hold checkbox state (0 or 1)
+combine_subs_checkbox = tk.Checkbutton(subtitle_selection_frame, text="Combine Subtitles", variable=combine_subs_var)
+combine_subs_checkbox.grid(row=0, column=2, columnspan=2, sticky="w", padx=5, pady=1)
+regular_subtitle_path = "Download"
+foreign_subtitle_path = "Download"
+subtitle_regular_var = tk.StringVar(value=f"{regular_subtitle_path}")
+subtitle_foreign_var = tk.StringVar(value=f"{foreign_subtitle_path}")
+subtitle_button = tk.Button(subtitle_selection_frame, text="Regular Subtitle Source", command=select_subtitle)
+subtitle_button.grid(row=1, column=1, columnspan=2, sticky="w", padx=5, pady=1)
+subtitle_label = tk.Label(subtitle_selection_frame, textvariable=subtitle_regular_var)
+subtitle_label.grid(row=1, column=3, sticky="w", padx=5, pady=1)
+foreign_subtitle_button = tk.Button(subtitle_selection_frame, text="Foreign Subtitle Source", command=select_foreign_subtitle)
+foreign_subtitle_button.grid(row=2, column=1, columnspan=2, sticky="w", padx=5, pady=1)
+foreign_subtitle_label = tk.Label(subtitle_selection_frame, textvariable=subtitle_foreign_var)
+foreign_subtitle_label.grid(row=2, column=3, sticky="w", padx=5, pady=1)
+
+# make a horizontal break
+# break_label = tk.Label(root, bg="#999999", text="", height=0)
+# break_label.grid(row=4, column=0, sticky="nsew", columnspan=2, padx=5, pady=5)
+line = tk.Frame(root, height=2, bg="#999999", bd=0)
+line.grid(row=4, column=0, columnspan=2, sticky="we", padx=10, pady=5)
+
+
+
 # Folder Selection Frame
 folder_frame = tk.Frame(root)
-folder_frame.grid(row=3, column=0, columnspan=2, sticky="w", padx=5, pady=5)
+folder_frame.grid(row=5, column=0, columnspan=2, sticky="w", padx=5, pady=5)
 
 folder_var = tk.StringVar(value=f"Save To: {download_folder}")
 folder_button = tk.Button(folder_frame, text="Select Destination Folder", command=select_folder)
@@ -1338,7 +1499,7 @@ folder_label.pack(side="left")
 
 # File name entry (on the same line)
 filename_frame = tk.Frame(root)
-filename_frame.grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+filename_frame.grid(row=6, column=0, columnspan=2, sticky="w", padx=10, pady=5)
 
 filename_label = tk.Label(filename_frame, text="File Name:")
 filename_label.pack(side="left", padx=(0, 5))
@@ -1374,7 +1535,7 @@ def display_filename_settings(bool=True):
     print("filename settings button pushed")
     if filename_settings_frame == None and bool == True:
         filename_settings_frame = tk.Frame(root, bg="#999999")
-        filename_settings_frame.grid(row=5, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
+        filename_settings_frame.grid(row=7, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
 
         settings = check_and_create_settings()
 
@@ -1423,7 +1584,7 @@ default_filename_button.pack(side="left", padx=(100, 0))
 
 # Submit and Discard buttons (side by side)
 button_frame = tk.Frame(root)
-button_frame.grid(row=6, column=0, columnspan=2, pady=10, padx=10, sticky="w")
+button_frame.grid(row=8, column=0, columnspan=2, pady=10, padx=10, sticky="w")
 
 submit_button = tk.Button(button_frame, text="Start Download", default="active", command=start_download)
 submit_button.pack(side="left", padx=(0, 5))
@@ -1438,43 +1599,43 @@ output_label.pack(side="left")
 
 # Progress bar widget
 progress_bar = ttk.Progressbar(root, orient="horizontal", length=300, mode="determinate")
-progress_bar.grid(row=7, column=0, pady=0, padx=10, sticky="w")
+progress_bar.grid(row=9, column=0, pady=0, padx=10, sticky="w")
 
 progress_frame = tk.Frame(root)
-progress_frame.grid(row=8, column=0, sticky="w", padx=5, pady=2)
+progress_frame.grid(row=10, column=0, sticky="w", padx=5, pady=2)
 
 # Progress information labels
 progress_label = tk.Label(progress_frame, text="Downloading:")
-progress_label.grid(row=8, column=0, sticky="w", padx=10, pady=2)
+progress_label.grid(row=10, column=0, sticky="w", padx=10, pady=2)
 
 fragment_label = tk.Label(progress_frame, text="Fragments:")
-fragment_label.grid(row=9, column=0, sticky="w", padx=10, pady=2)
+fragment_label.grid(row=11, column=0, sticky="w", padx=10, pady=2)
 
 eta_label = tk.Label(progress_frame, text="ETA:")
-eta_label.grid(row=10, column=0, sticky="w", padx=10, pady=2)
+eta_label.grid(row=12, column=0, sticky="w", padx=10, pady=2)
 
 size_label = tk.Label(progress_frame, text="Estimated File Size:")
-size_label.grid(row=11, column=0, sticky="w", padx=10, pady=2)
+size_label.grid(row=13, column=0, sticky="w", padx=10, pady=2)
 
 # Progress information values (separate column for alignment)
 progress_var = tk.StringVar()
 progress_value = tk.Label(progress_frame, textvariable=progress_var)
-progress_value.grid(row=8, column=1, sticky="w", padx=5, pady=2)
+progress_value.grid(row=10, column=1, sticky="w", padx=5, pady=2)
 
 fragment_var = tk.StringVar()
 fragment_value = tk.Label(progress_frame, textvariable=fragment_var)
-fragment_value.grid(row=9, column=1, sticky="w", padx=5, pady=2)
+fragment_value.grid(row=11, column=1, sticky="w", padx=5, pady=2)
 
 eta_var = tk.StringVar()
 eta_value = tk.Label(progress_frame, textvariable=eta_var)
-eta_value.grid(row=10, column=1, sticky="w", padx=5, pady=2)
+eta_value.grid(row=12, column=1, sticky="w", padx=5, pady=2)
 
 size_var = tk.StringVar()
 size_value = tk.Label(progress_frame, textvariable=size_var)
-size_value.grid(row=11, column=1, sticky="w", padx=5, pady=2)
+size_value.grid(row=13, column=1, sticky="w", padx=5, pady=2)
 
 tmdb_image_frame = tk.Frame(root, bg="#999999")
-tmdb_image_frame.grid(row=8, column=1, sticky="e", padx=5, pady=2)
+tmdb_image_frame.grid(row=10, column=1, sticky="e", padx=5, pady=2)
 
 # Thumbnail image in the bottom corner
 image_label = tk.Label(tmdb_image_frame, text="No Thumbnail", width=192, height=108)
@@ -1485,7 +1646,7 @@ image_label.bind("<Button-1>", lambda event: toggle_image_selection())
 
 # Frame for scrollable images at the bottom
 scrollable_frame = tk.Frame(root)
-scrollable_frame.grid(row=12, column=0, sticky="ew", padx=5, pady=5, columnspan=2)
+scrollable_frame.grid(row=14, column=0, sticky="ew", padx=5, pady=5, columnspan=2)
 
 # Canvas for scrolling functionality
 canvas = tk.Canvas(scrollable_frame, height=60, width=600, bg='#999999', bd=0, highlightthickness=0)  # Set height of the canvas
@@ -1517,7 +1678,7 @@ def toggle_image_selection(show=None):
 
     if show is True:
         # Always show the frame
-        scrollable_frame.grid(row=11, column=0, sticky="ew", padx=5, pady=5, columnspan=2)
+        scrollable_frame.grid(row=14, column=0, sticky="ew", padx=5, pady=5, columnspan=2)
     elif show is False:
         # Always hide the frame
         scrollable_frame.grid_forget()
@@ -1526,7 +1687,7 @@ def toggle_image_selection(show=None):
         if scrollable_frame.winfo_ismapped():
             scrollable_frame.grid_forget()  # Hide the frame
         else:
-            scrollable_frame.grid(row=11, column=0, sticky="ew", padx=5, pady=5, columnspan=2)  # Show the frame
+            scrollable_frame.grid(row=14, column=0, sticky="ew", padx=5, pady=5, columnspan=2)  # Show the frame
 
 
     if last_load_id == current_tmdb_id:
