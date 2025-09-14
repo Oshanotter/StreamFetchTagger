@@ -17,7 +17,7 @@ from PIL import ImageTk, Image
 from io import BytesIO
 
 app_name = "StreamFetchTagger"
-app_version = "1.3.0"
+app_version = "1.3.1"
 tmdb_key = "9de437782139633fe25c0d307d5da137"
 opensubtitles_token = None
 opensubtitles_key = "lhUi4siT3Y6pbCI0qkCNNJG48q1mzXLT"
@@ -281,6 +281,7 @@ def retrieve_tmdb_data(event=None):
                     "Director": ", ".join(directors),
                     "Screenwriters": ", ".join(screenwriters),
                     "Media Kind": "10", # Set mediatype to tv show
+                    "Sort Name": "S" + season + "E" + episode, # Set the sort name so that thumbnails show up correctly in Apple TV
                 }
             else:
                 # Metadata for movies
@@ -682,20 +683,25 @@ def get_subtitles():
         global foreign_subtitle_path
 
         if regular_subtitle_path != "Download" and foreign_subtitle_path != "Download":
+            print("not downloading subtitles")
             clean_subtitles(regular_subtitle_path, sub_path, remove=False)
             clean_subtitles(foreign_subtitle_path, sub_foreign_path, foreign_only=True, remove=False)
             return_dict = {"subtitles": sub_path, "foreign_subtitles": sub_foreign_path}
 
         elif not best_subtitles:
             if regular_subtitle_path != "Download":
+                print("using regular subs from file")
                 clean_subtitles(regular_subtitle_path, sub_path, remove=False)
                 reg_subs = sub_path
             else:
+                print("no regular subs")
                 reg_subs = None
             if foreign_subtitle_path != "Download":
+                print("using foreign subs from file")
                 clean_subtitles(foreign_subtitle_path, sub_foreign_path, foreign_only=True, remove=False)
                 fore_subs = sub_foreign_path
             else:
+                print("no foreign subs")
                 fore_subs = None
 
             #print("No subtitles available")
@@ -703,29 +709,37 @@ def get_subtitles():
 
         elif len(best_subtitles) > 1:
             if regular_subtitle_path != "Download":
+                print("using regular subs from file")
                 clean_subtitles(regular_subtitle_path, sub_path, remove=False)
             else:
+                print("downloading regular subtitles")
                 sub = download_subtitles(best_subtitles[0]['attributes']['files'][0]['file_id'], temp_sub_path)
                 clean_subtitles(sub, sub_path)
 
             if foreign_subtitle_path != "Download":
+                print("using foreign subs from file")
                 clean_subtitles(foreign_subtitle_path, sub_foreign_path, foreign_only=True, remove=False)
             else:
+                print("downloading foreign subtitles")
                 sub_foreign = download_subtitles(best_subtitles[1]['attributes']['files'][0]['file_id'], temp_foreign_sub_path)
                 clean_subtitles(sub_foreign, sub_foreign_path, foreign_only=True)
 
             return_dict = {"subtitles": sub_path, "foreign_subtitles": sub_foreign_path}
         else:
             if regular_subtitle_path != "Download":
+                print("using regular subs from file")
                 clean_subtitles(regular_subtitle_path, sub_path, remove=False)
             else:
+                print("downloading regular subs")
                 sub = download_subtitles(best_subtitles[0]['attributes']['files'][0]['file_id'], temp_sub_path)
                 clean_subtitles(sub, sub_path)
 
             if foreign_subtitle_path != "Download":
+                print("using foreign subs from file")
                 clean_subtitles(foreign_subtitle_path, sub_foreign_path, foreign_only=True, remove=False)
                 fore_subs = sub_path
             else:
+                print("no foreign subs")
                 fore_subs = None
 
             return_dict = {"subtitles": sub_path, "foreign_subtitles": fore_subs}
@@ -981,9 +995,10 @@ def start_download(startingText = "Starting Download..."):
     def download_video():
         global download_process
         global original_file
+        url = url_entry.get().strip()
         try:
             if url.startswith(("http://", "https://")):
-                # Prepare yt-dlp options
+                print("bye there")# Prepare yt-dlp options
                 ydl_opts = {
                     'format': 'best/bestvideo+bestaudio',  # Download the best quality
                     'outtmpl': download_path,  # Path where the file will be saved
@@ -999,6 +1014,10 @@ def start_download(startingText = "Starting Download..."):
 
             else:
                 # The url might be a filepath
+                # remove surrounding quotes if they exist
+                if (url.startswith(("'", '"')) and url.endswith(("'", '"'))):
+                    url = url[1:-1]
+
                 if os.path.exists(url):
                     # Copy the file from the url path to the hidden_folder with the name of the url hash
                     print("filepath exists")
