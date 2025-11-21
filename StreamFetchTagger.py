@@ -17,7 +17,7 @@ from PIL import ImageTk, Image
 from io import BytesIO
 
 app_name = "StreamFetchTagger"
-app_version = "1.3.1"
+app_version = "1.4.0"
 tmdb_key = "9de437782139633fe25c0d307d5da137"
 opensubtitles_token = None
 opensubtitles_key = "lhUi4siT3Y6pbCI0qkCNNJG48q1mzXLT"
@@ -122,7 +122,7 @@ def retrieve_tmdb_data(event=None):
                 # Handle TV Show general data
                 unknown_media = episode_data.get("name", None)
                 name = episode_data.get("name", "Unknown Episode Title")
-                genre = ", ".join([g["name"] for g in show_data.get("genres", [])])
+                genre = convert_tmdb_to_apple_genres([g["name"] for g in show_data.get("genres", [])])
                 release_date = episode_data.get("air_date", "1900-01-01")
                 tv_show = show_data.get("name", "Unknown Series Title")
                 tv_network = ", ".join([net["name"] for net in show_data.get("networks", [])])
@@ -179,7 +179,7 @@ def retrieve_tmdb_data(event=None):
 
                 unknown_media = data.get("title", None)
                 name = data.get("title", "Unknown Movie Title")
-                genre = ", ".join([g["name"] for g in data.get("genres", [])])
+                genre = convert_tmdb_to_apple_genres([g["name"] for g in data.get("genres", [])])
                 release_date = data.get("release_date", "1900-01-01")
                 description = data.get("overview", "No description available.")
                 long_description = data.get("overview", "No long description available.")
@@ -314,6 +314,73 @@ def retrieve_tmdb_data(event=None):
             print(f"Error: {e}")
 
     debounce_timer = root.after(500, lambda: threading.Thread(target=retrieve_data, daemon=True).start())
+
+
+def convert_tmdb_to_apple_genres(tmdb_genres):
+    # Convert TMDB style genres to Apple TV style genres
+
+    # base mapping for single genre conversions
+    single_map = {
+        "Action": "Action",
+        "Adventure": "Adventure",
+        "Animation": "Animation",
+        "Comedy": "Comedy",
+        "Documentary": "Documentary",
+        "Drama": "Drama",
+        "Family": "Kids & Family",
+        "Fantasy": "Fantasy",
+        "Science Fiction": "Sci-Fi",
+        "History": "History",
+        "Horror": "Horror",
+        "Thriller": "Thriller",
+        "Music": "Musical",
+        "Mystery": "Mystery",
+        "Romance": "Romance",
+        "War": "War & Military",
+        "Western": "Western"
+    }
+
+    # genres to remove entirely
+    drop_genres = ["Crime", "TV Movie"]
+
+    # multiple genre combination
+    merged_genres = {
+        "Action & Adventure": ["Action", "Adventure"],
+        "Sci-Fi & Fantasy": ["Sci-Fi", "Fantasy"]
+    }
+
+    # genres that only exist in Apple TV and have no corresponding TMDB genre
+    apple_tv_only_genres = ["Anime", "Biography", "Bollywood", "Classics", "Foreign", "Holiday", "Independent", "International", "Music Feature Films", "Nonfiction", "Reality", "Short Films", "Special Interest", "Sports", "Travel"]
+
+    # remove dropped genres and convert simple ones
+    new_genres = []
+    for genre in tmdb_genres:
+        if genre in drop_genres:
+            # don't add it to the list
+            continue
+        if genre in single_map:
+            new_genres.append(single_map[genre])
+
+
+    # replace two similar genres with a single genre
+    # example: "Action" and "Adventure" is replaced with "Action & Adventure"
+    for genre in merged_genres:
+        genre1 = merged_genres[genre][0]
+        genre2 = merged_genres[genre][1]
+        if genre1 in new_genres and genre2 in new_genres:
+            index = new_genres.index(genre1)
+            new_genres[index] = genre
+            index = new_genres.index(genre2)
+            new_genres[index] = genre
+
+
+    # if list is empty, use a default genre "Independent"
+    if not new_genres:
+        new_genres.append(apple_tv_only_genres[6])
+
+    # return the first genre in the list
+    return new_genres[0]
+
 
 def replace_for_default_filename(title, release_date, episode_name=None, episode=None, season=None):
     # replaces the default filename with the given parameters
@@ -770,7 +837,8 @@ def check_and_create_settings():
         "download_folder": home_folder,
         "file_extension": ".mp4",
         "default_movie_filename": "<title> (<year>)",
-        "default_tv_show_filename": "S<season_number>E<episode_number> - <title>"
+        "default_tv_show_filename": "S<season_number>E<episode_number> - <title>",
+        "request_headers": "{}"
     }
 
     # Check if settings.json exists
@@ -810,7 +878,7 @@ def check_and_create_settings():
 
     return settings
 
-def update_settings(download_folder=None, file_extension=None, default_movie_filename=None, default_tv_show_filename=None):
+def update_settings(download_folder=None, file_extension=None, default_movie_filename=None, default_tv_show_filename=None, request_headers=None):
     """Updates the settings in the settings.json file, given the download folder path and the file extension of the video."""
     settings_file = os.path.join(hidden_folder, "settings.json")
 
@@ -833,6 +901,9 @@ def update_settings(download_folder=None, file_extension=None, default_movie_fil
 
     if default_tv_show_filename:
         settings["default_tv_show_filename"] = default_tv_show_filename
+
+    if request_headers != None:
+        settings["request_headers"] = request_headers
 
     # Save updated settings back to the file
     with open(settings_file, 'w') as f:
@@ -918,6 +989,18 @@ def cleanup_old_files():
     cleanup_thread.start()
     print("cleaning...")
 
+def get_request_headers():
+    # Gets the default request headers from the settings and converts them to a dict
+    settings = check_and_create_settings()
+    request_headers_string = settings.get("request_headers")
+    try:
+        headers_dict = eval(request_headers_string)
+        print(headers_dict)
+        return headers_dict
+    except Exception as e:
+        raise Exception("Error evaluating custom request headers.") from e
+
+
 
 # Functions related to the actual download of the video
 
@@ -998,7 +1081,7 @@ def start_download(startingText = "Starting Download..."):
         url = url_entry.get().strip()
         try:
             if url.startswith(("http://", "https://")):
-                print("bye there")# Prepare yt-dlp options
+                # Prepare yt-dlp options
                 ydl_opts = {
                     'format': 'best/bestvideo+bestaudio',  # Download the best quality
                     'outtmpl': download_path,  # Path where the file will be saved
@@ -1006,6 +1089,7 @@ def start_download(startingText = "Starting Download..."):
                     'quiet': False,  # Show output to the console
                     'skip_unavailable_fragments': False,  # Give an error if a fragment is unavailable
                     'ffmpeg_location': FFMPEG_PATH,  # Ensure ffmpeg is found
+                    'http_headers': get_request_headers(),
                 }
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -1138,17 +1222,24 @@ def start_download(startingText = "Starting Download..."):
                                 else:
                                     res_parts = parts[-1].split()
                                     height = int(res_parts[-1])
+                                    width = iny(res_parts[0])
                                     print(height)
                                     break
 
-                            if height < 720:
-                                metadata_string += '{HD Video:0}'
-                            elif 720 <= height < 1080:
-                                metadata_string += '{HD Video:1}'
-                            elif 1080 <= height < 2160:
-                                metadata_string += '{HD Video:2}'
-                            else:
-                                metadata_string += '{HD Video:3}'
+                            resolution_dict = {
+                                0: {"width": 640, "height": 360},
+                                1: {"width": 1280, "height": 720},
+                                2: {"width": 1920, "height": 1080},
+                                3: {"width": 3840, "height": 2160}
+                            }
+
+                            resolution_type = 0
+                            for key in resolution_dict:
+                                res = resolution_dict[key]
+                                if width >= res["width"]:
+                                    resolution_type = key
+
+                            metadata_string += '{HD Video:' + str(resolution_type) + '}'
 
                         except Exception as e:
                             metadata_string += '{HD Video:0}'
@@ -1244,8 +1335,8 @@ def start_download(startingText = "Starting Download..."):
 
         except Exception as e:
             submit_button.config(text="Try Again", command=lambda: start_download("Retrying..."))
-            # Enable the url input again
-            url_entry.config(state="normal")
+            # Enable the inputs again
+            disable_inputs(False)
             output_var.set("Error: " + str(e))
             output_label.config(fg="red")
             print(e)
@@ -1573,6 +1664,12 @@ def display_filename_settings(bool=True):
         available_tags_label = tk.Label(filename_settings_frame, text="Available Tags:    <title> <year> <episode_name> <episode_number> <season_number>", bg="#999999")
         available_tags_label.grid(row=2, column=0, padx=(5, 0), pady=10, columnspan=2)
 
+        default_request_headers_label = tk.Label(filename_settings_frame, text="Default Request Headers:", bg="#999999")
+        default_request_headers_label.grid(row=3, column=0, padx=(5, 5), pady=10)
+        default_request_headers_entry = tk.Entry(filename_settings_frame, width=40)
+        default_request_headers_entry.grid(row=3, column=1, padx=(3, 0), pady=10)
+        default_request_headers_entry.insert(0, settings.get("request_headers"))
+
         default_filename_button.config(text="Save Settings")
 
     else:
@@ -1584,13 +1681,15 @@ def display_filename_settings(bool=True):
         entries = [child for child in filename_settings_frame.winfo_children() if isinstance(child, tk.Entry)]
         default_movie_name_entry = entries[0]
         default_tv_show_name_entry = entries[1]
+        default_request_headers_entry = entries[2]
         default_movie_filename = default_movie_name_entry.get()
         default_tv_show_filename = default_tv_show_name_entry.get()
+        default_request_headers = default_request_headers_entry.get()
 
         filename_settings_frame.grid_forget()
         filename_settings_frame = None
 
-        update_settings(default_movie_filename=default_movie_filename, default_tv_show_filename=default_tv_show_filename)
+        update_settings(default_movie_filename=default_movie_filename, default_tv_show_filename=default_tv_show_filename, request_headers=default_request_headers)
 
         default_filename_button.config(text="Filename Settings")
 
