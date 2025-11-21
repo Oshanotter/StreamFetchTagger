@@ -1222,7 +1222,7 @@ def start_download(startingText = "Starting Download..."):
                                 else:
                                     res_parts = parts[-1].split()
                                     height = int(res_parts[-1])
-                                    width = iny(res_parts[0])
+                                    width = int(res_parts[0])
                                     print(height)
                                     break
 
