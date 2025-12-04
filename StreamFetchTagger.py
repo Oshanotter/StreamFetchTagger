@@ -17,7 +17,7 @@ from PIL import ImageTk, Image
 from io import BytesIO
 
 app_name = "StreamFetchTagger"
-app_version = "1.4.0"
+app_version = "1.4.1"
 tmdb_key = "9de437782139633fe25c0d307d5da137"
 opensubtitles_token = None
 opensubtitles_key = "lhUi4siT3Y6pbCI0qkCNNJG48q1mzXLT"
@@ -1090,6 +1090,9 @@ def start_download(startingText = "Starting Download..."):
                     'skip_unavailable_fragments': False,  # Give an error if a fragment is unavailable
                     'ffmpeg_location': FFMPEG_PATH,  # Ensure ffmpeg is found
                     'http_headers': get_request_headers(),
+                    'retries': 10,  # Retry how many times for general errors
+                    'fragment_retries': 10,  # Retry failed video fragments
+                    'retry_sleep': 2,  # Always sleep 2 seconds between retries
                 }
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
