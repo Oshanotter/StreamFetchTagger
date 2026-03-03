@@ -17,11 +17,11 @@ from PIL import ImageTk, Image
 from io import BytesIO
 
 app_name = "StreamFetchTagger"
-app_version = "1.4.1"
+app_version = "1.4.2"
 tmdb_key = "9de437782139633fe25c0d307d5da137"
 opensubtitles_token = None
 opensubtitles_key = "lhUi4siT3Y6pbCI0qkCNNJG48q1mzXLT"
-opensubtitles_user_agent = app_name + " v" + app_version
+opensubtitles_user_agent = "unsightlyPinnipedCalm" #app_name + " v" + app_version
 download_folder = os.getcwd()
 home_folder = os.path.expanduser("~")
 hidden_folder = os.path.join(home_folder, "." + app_name)
