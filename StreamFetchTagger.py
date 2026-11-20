@@ -17,7 +17,7 @@ from PIL import ImageTk, Image
 from io import BytesIO
 
 app_name = "StreamFetchTagger"
-app_version = "1.4.2"
+app_version = "1.4.3"
 tmdb_key = "9de437782139633fe25c0d307d5da137"
 opensubtitles_token = None
 opensubtitles_key = "lhUi4siT3Y6pbCI0qkCNNJG48q1mzXLT"
@@ -1116,7 +1116,7 @@ def start_download(startingText = "Starting Download..."):
 
                     # Copy file manually
                     # Copy using FFmpeg to get rid of unwanted streams
-                    copy_command = [FFMPEG_PATH, "-i", url, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", destination, "-y"]
+                    copy_command = [FFMPEG_PATH, "-i", url, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", "-tag:v", "hvc1", "-f", "mp4", destination, "-y"]
                     copy_process = subprocess.Popen(
                         copy_command,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
@@ -1177,10 +1177,10 @@ def start_download(startingText = "Starting Download..."):
                     download_thumbnail()
                     if thumbnail_image_path_or_url != placeholder_image_path:
                         print("artwork is not default")
-                        ffmpeg_command = [FFMPEG_PATH, '-i', original_file, '-i', thumbnail_image_path_or_url, '-map', '0', '-map', '1', '-c:v', 'copy', '-c:a', 'copy', '-disposition:v:1', 'attached_pic', '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', 'faststart', temp_file, '-y']
+                        ffmpeg_command = [FFMPEG_PATH, '-i', original_file, '-i', thumbnail_image_path_or_url, '-map', '0', '-map', '1', '-c', 'copy', '-tag:v:0', 'hvc1', '-disposition:v:1', 'attached_pic', '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', '+faststart', '-f', 'mp4', temp_file, '-y']
                     else:
                         print("artowrk is default")
-                        ffmpeg_command = [FFMPEG_PATH, '-i', original_file, '-c:v', 'copy', '-c:a', 'copy', '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', 'faststart', temp_file, '-y']
+                        ffmpeg_command = [FFMPEG_PATH, '-i', original_file, '-map', '0', '-c', 'copy', '-tag:v:0', 'hvc1', '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', '+faststart', '-f', 'mp4', temp_file, '-y']
 
                     output_var.set("Converting file to " + file_extension)
                     progress_bar["value"] = 20
