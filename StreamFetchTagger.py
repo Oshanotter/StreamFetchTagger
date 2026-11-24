@@ -17,7 +17,7 @@ from PIL import ImageTk, Image
 from io import BytesIO
 
 app_name = "StreamFetchTagger"
-app_version = "1.4.3"
+app_version = "1.4.4"
 tmdb_key = "9de437782139633fe25c0d307d5da137"
 opensubtitles_token = None
 opensubtitles_key = "lhUi4siT3Y6pbCI0qkCNNJG48q1mzXLT"
@@ -50,7 +50,7 @@ FFMPEG_PATH = get_binary_path("ffmpeg")
 MP4BOX_PATH = get_binary_path("MP4Box")
 SUBLERCLI_PATH = get_binary_path("SublerCLI")
 
-# Functions to retireve information and download assets about the video
+# Functions to retrieve information and download assets about the video
 
 def retrieve_tmdb_data(event=None):
     """Retrieves the data from TMDB for the specified ID and media type"""
@@ -607,9 +607,9 @@ def get_subtitles():
                     an8_present = True
                     line = line.replace(r"{\an8}", "")  # remove the tag
 
-                if line.strip():
+                if line.strip() and line.strip() != "\x00":
                     buffer.append(line)
-                else:
+                elif buffer:
                     if buffer:
                         if any("<font" in l for l in buffer):
                             buffer.clear()
@@ -632,6 +632,20 @@ def get_subtitles():
 
                         buffer.clear()
                         an8_present = False  # reset for next block
+
+            if buffer:
+                if len(buffer) >= 2 and "-->" in buffer[1]:
+                    ts_line = buffer[1].strip()
+
+                    if an8_present:
+                        ts_line += " X1:0"
+                    if foreign_only:
+                        ts_line += " !!!"
+
+                    buffer[1] = ts_line + "\n"
+
+                outfile.writelines(buffer)
+                outfile.write("\n")
 
         if remove:
             os.remove(input_file)
@@ -1000,6 +1014,19 @@ def get_request_headers():
     except Exception as e:
         raise Exception("Error evaluating custom request headers.") from e
 
+def get_video_codec_args(filepath):
+    result = subprocess.run(
+        [FFMPEG_PATH, "-i", filepath],
+        capture_output=True,
+        text=True
+    )
+
+    output = result.stderr.lower()
+
+    if "video: hevc" in output:
+        return ["-tag:v:0", "hvc1"]
+
+    return []
 
 
 # Functions related to the actual download of the video
@@ -1116,7 +1143,7 @@ def start_download(startingText = "Starting Download..."):
 
                     # Copy file manually
                     # Copy using FFmpeg to get rid of unwanted streams
-                    copy_command = [FFMPEG_PATH, "-i", url, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", "-tag:v", "hvc1", "-f", "mp4", destination, "-y"]
+                    copy_command = [FFMPEG_PATH, "-i", url, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", *get_video_codec_args(url), "-f", "mp4", destination, "-y"]
                     copy_process = subprocess.Popen(
                         copy_command,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
@@ -1177,10 +1204,10 @@ def start_download(startingText = "Starting Download..."):
                     download_thumbnail()
                     if thumbnail_image_path_or_url != placeholder_image_path:
                         print("artwork is not default")
-                        ffmpeg_command = [FFMPEG_PATH, '-i', original_file, '-i', thumbnail_image_path_or_url, '-map', '0', '-map', '1', '-c', 'copy', '-tag:v:0', 'hvc1', '-disposition:v:1', 'attached_pic', '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', '+faststart', '-f', 'mp4', temp_file, '-y']
+                        ffmpeg_command = [FFMPEG_PATH, '-i', original_file, '-i', thumbnail_image_path_or_url, '-map', '0', '-map', '1', '-c', 'copy', *get_video_codec_args(url), '-disposition:v:1', 'attached_pic', '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', '+faststart', '-f', 'mp4', temp_file, '-y']
                     else:
                         print("artowrk is default")
-                        ffmpeg_command = [FFMPEG_PATH, '-i', original_file, '-map', '0', '-c', 'copy', '-tag:v:0', 'hvc1', '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', '+faststart', '-f', 'mp4', temp_file, '-y']
+                        ffmpeg_command = [FFMPEG_PATH, '-i', original_file, '-map', '0', '-c', 'copy', *get_video_codec_args(url), '-metadata:s:a:0', 'language=eng', '-metadata:s:v:0', 'language=eng', '-movflags', '+faststart', '-f', 'mp4', temp_file, '-y']
 
                     output_var.set("Converting file to " + file_extension)
                     progress_bar["value"] = 20
